@@ -11,7 +11,6 @@ import {
 import { nodeServerTestPaths } from './node-server-test-paths.mjs'
 import { ORCAD_CHILD_ENTRY_POINTS } from './orcad-entry-build.mjs'
 import { NODE_RUNTIME_PIN } from '../../src/shared/node-runtime-pin.ts'
-import { ORCAD_BUN_VERSION } from '../../src/shared/orcad-bun-runtime.ts'
 
 const temporaryDirs = []
 afterEach(() => {
@@ -161,6 +160,38 @@ it('keeps all ten platform jobs and runs them when detection is skipped or fails
   }
 })
 
+it('builds server glibc slots on glibc 2.28 and the compat slot on glibc 2.17 (design D6)', () => {
+  const workflow = parse(
+    readFileSync(new URL('../../.github/workflows/node-server-tests.yml', import.meta.url), 'utf8')
+  )
+  const floor = workflow.jobs.linux_glibc_floor
+  expect(floor.container).toBe('${{ matrix.image }}')
+  expect(floor.strategy.matrix.include).toEqual([
+    {
+      os: 'ubuntu-22.04',
+      image: expect.stringMatching(/^quay\.io\/pypa\/manylinux_2_28_x86_64@sha256:[0-9a-f]{64}$/)
+    },
+    {
+      os: 'ubuntu-24.04-arm',
+      image: expect.stringMatching(/^quay\.io\/pypa\/manylinux_2_28_aarch64@sha256:[0-9a-f]{64}$/)
+    }
+  ])
+  expect(floor.env).toMatchObject({ CC: 'gcc', CXX: 'g++' })
+
+  const compat = workflow.jobs.linux_glibc217_compat
+  expect(compat.needs).toEqual(['changes', 'persistence'])
+  expect(compat.if).toBe(floor.if)
+  expect(compat['runs-on']).toBe('ubuntu-22.04')
+  const run = compat.steps.map((step) => step.run ?? '').join('\n')
+  expect(run).toMatch(/quay\.io\/pypa\/manylinux2014_x86_64@sha256:[0-9a-f]{64} /)
+  expect(run).toContain('--slot=linux-x64-glibc217 --print-runtime')
+  expect(run).toContain('build-orcad-prebuilds.mjs --slot=linux-x64-glibc217\n')
+  expect(run).toContain('--require-slots linux-x64-glibc217')
+  expect(run).toContain(
+    'env -u LD_LIBRARY_PATH node config/scripts/build-orcad-prebuilds.mjs --slot=linux-x64-glibc217 --smoke'
+  )
+})
+
 it('runs the Bun and Node cross-runtime tests on Linux against pinned inputs', () => {
   const workflow = parse(
     readFileSync(new URL('../../.github/workflows/node-server-tests.yml', import.meta.url), 'utf8')
@@ -168,7 +199,8 @@ it('runs the Bun and Node cross-runtime tests on Linux against pinned inputs', (
   const steps = workflow.jobs.persistence.steps
   const setupBun = steps.find((step) => String(step.uses).startsWith('oven-sh/setup-bun@'))
   expect(setupBun.uses).toMatch(/^oven-sh\/setup-bun@[0-9a-f]{40}$/)
-  expect(setupBun.with['bun-version']).toBe(ORCAD_BUN_VERSION)
+  // Mirrors LAST_BUN_ORCAD_VERSION in src/main/orcad/orcad-node-slot-fixture.ts.
+  expect(setupBun.with['bun-version']).toBe('1.4.2')
   const build = steps.find((step) => String(step.run).includes('build-orcad-bun.mjs'))
   expect(build.env.BUN_ORCAD_COMMIT).toMatch(/^[0-9a-f]{40}$/)
   expect(build.run).toContain('ORCA_BUN_ORCAD_SLOT=')

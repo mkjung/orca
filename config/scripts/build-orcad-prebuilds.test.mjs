@@ -219,7 +219,10 @@ describe('prebuild floor gate', () => {
     writeFileSync(join(apiDir, 'package.json'), JSON.stringify({ name: 'node-addon-api' }))
     writeFileSync(
       join(scripts, 'pinned-node-downloads.mjs'),
-      'export async function preparePinnedNodeDir({ workDir }) { return workDir }'
+      `export async function preparePinnedNodeDir({ workDir }) { return workDir }
+       export async function ensurePinnedNodeExecutable() {
+         throw new Error('unexpected runtime download in build-only fixture');
+       }`
     )
     writeFileSync(
       join(scripts, 'script-child-process.mjs'),
@@ -277,7 +280,7 @@ ${PATCHED_PTY_CC}`
     return { ...result, manifest: join(root, 'out', 'orcad-prebuilds', 'manifest.json') }
   }
 
-  it('publishes a musl slot without applying Ubuntu glibc requirements', () => {
+  it('publishes a musl slot without applying glibc requirements', () => {
     const result = runBuild({}, { reject: true })
     expect(result.status, result.stderr).toBe(0)
     expect(result.stdout).not.toContain('floor gate called')

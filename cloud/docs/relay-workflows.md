@@ -187,12 +187,16 @@ C30: the evidence must show the canary control was placed on C30, read C30's own
 and bind the selector generation, and any failure returns C30 to migration-only. The SQL-failure and
 database-pool rules read C30's own metrics only. Director values are recorded under
 `director`-prefixed names but do not fail the canary, because directors show a steady baseline of
-`relay_cells` lock refusals and pool waits unrelated to C30. C30 was promoted to general on
+`relay_cells` lock refusals and pool waits unrelated to C30. Director region fallbacks are keyed by
+the host's target region, and the canary fails on any Asia-targeted one. US-targeted fallbacks are
+recorded but not gated: they are placement-lane requests from unhinted or US-preferring hosts, which
+an Asia cell cannot cause. Staging still requires exactly its one
+intentional fallback. C30 was promoted to general on
 2026-09-23, so the same-cap job now rolls it as a general cell and the shadow gate's fleet pool list
 reads it beside C27-C29. A later Asia cell stays in the same-cap migration-only list and out of the
 fleet pool list until its own promotion, then moves to both together, as its own reviewed wave.
-C31 is in that state now: declared and listed as a same-cap migration-only cell, not yet in the
-fleet pool list.
+C31 followed that path and was promoted to general on 2026-10-01, so it is now a same-cap general
+cell and in the fleet pool list beside C27-C30.
 Rollback returns
 Asia cells to migration-only; it does not destroy the network or use
 existing-only. The production topology dispatch remains unavailable until the
@@ -406,8 +410,10 @@ sets and the two migration-only US 600/60 cells, C17 and C18, without changing a
 shape. Use `canary-apply` for exactly one cell. A successful canary
 seals its commit, target and rollback digests, selector generation, and durable rehome generation;
 `batch-apply` accepts only that same authority and rolls two to four cells sequentially. Both apply
-modes first refuse a cell whose hosts (controls) exceed 80% of the free slots on the other fresh
-general cells, since drained hosts with nowhere to go keep redialling and pin the cell. A cell's free
+modes and `rollback` first refuse a cell whose hosts (controls) exceed 80% of the free slots on the
+other fresh general cells, since drained hosts with nowhere to go keep redialling and pin the cell.
+`verify` runs the same read-only check, so it reports the headroom answer before an apply is
+dispatched; a rollback that resumes after its restart drains nothing and skips it. A cell's free
 slots are its normal admission pause minus the larger of observed connections and enforced units,
 minus outstanding control reservations; each moved host also brings its splices, which the 20%
 margin covers. Each cell is isolated, drained until restart-safe, replaced
@@ -482,6 +488,15 @@ drained. Then read the cell's live runtime image from
 
 A mutating dispatch still needs a fresh aggregate monitor dry-run unless the break-glass
 override below is used.
+
+"Fresh" is short. The dispatch's `gate` job must see the dry-run completed at most 5 minutes
+earlier, on its own clock, and its checkout alone takes about 1.5 minutes, so dispatch within
+about 3 minutes of the monitor finishing. The gate records that authorization instant in the
+single-use consumed marker. Each cell job then checks the evidence was at most 5 minutes old at
+that instant, and that the job itself started within 5 minutes of it, plus 75 minutes per
+predecessor cell. The live preflight in each wave still rejects evidence older than 10 minutes,
+plus the same 75 minutes per predecessor, on its own clock. Evidence the gate rejects as stale
+is not consumed, so a fresh monitor run is the only fix.
 
 ### Gate override (break-glass)
 

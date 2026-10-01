@@ -1,19 +1,27 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  assertCompatSlotHost,
+  COMPAT_SLOTS,
   findPostBaselineNodeApiNames,
+  findSharedCxxRuntimeNeeds,
   findSlotProblems,
   highestGlibcNeed,
+  isCompatSlot,
   mergeManifest,
   prebuildCompileGypi,
   sha256Of,
+  slotGlibcFloor,
   slotSourceFiles,
   SLOT_NAPI_VERSION,
   windowsConptyRuntimeDir
 } from './orcad-prebuild-slot-contents.mjs'
+import { ORCAD_ADDON_NAPI_VERSION } from '../../src/shared/orcad-artifacts.ts'
 
+const floors = createRequire(import.meta.url)('./verify-linux-glibc-floor.cjs')
 const dirs = []
 const temp = () => {
   const dir = mkdtempSync(join(tmpdir(), 'orcad-slot-contents-'))
@@ -46,6 +54,8 @@ const next = (slot, overrides = {}) => ({
 describe('N-API pinning', () => {
   it('pins N-API 8 so a host Node 18 (rung C) can load every slot', () => {
     expect(SLOT_NAPI_VERSION).toBe(8)
+    // The client's rung C host-Node gate must ask for exactly what the slots are built against.
+    expect(ORCAD_ADDON_NAPI_VERSION).toBe(SLOT_NAPI_VERSION)
     expect(JSON.parse(prebuildCompileGypi()).target_defaults.defines).toEqual(['NAPI_VERSION=8'])
   })
 
@@ -58,6 +68,19 @@ describe('N-API pinning', () => {
     ])
   })
 
+  it('links the C++ runtime statically only when asked', () => {
+    const conditions = (options) =>
+      JSON.parse(prebuildCompileGypi(options)).target_defaults.conditions
+    expect(conditions({ staticCxxRuntime: false })).toHaveLength(1)
+    expect(conditions({ staticCxxRuntime: true })).toContainEqual([
+      'OS=="linux"',
+      { ldflags: ['-static-libstdc++', '-static-libgcc'] }
+    ])
+    expect(JSON.parse(prebuildCompileGypi({ napi: 9 })).target_defaults.defines).toEqual([
+      'NAPI_VERSION=9'
+    ])
+  })
+
   it('flags node_api_* imports but not the module version export', () => {
     const binary = Buffer.from(
       '\0_napi_register_module_v1\0_node_api_module_get_api_version_v1\0napi_create_object\0'
@@ -65,6 +88,42 @@ describe('N-API pinning', () => {
     expect(findPostBaselineNodeApiNames(binary)).toEqual([])
     const newer = Buffer.concat([binary, Buffer.from('node_api_symbol_for\0')])
     expect(findPostBaselineNodeApiNames(newer)).toEqual(['node_api_symbol_for'])
+  })
+})
+
+describe('glibc floors per slot', () => {
+  it('gates default glibc slots at 2.28 and the compat slot at 2.17, never the desktop 2.31', () => {
+    expect(slotGlibcFloor('linux-x64-glibc')).toBe(floors.SERVER_SLOT_GLIBC_FLOOR)
+    expect(slotGlibcFloor('linux-arm64-glibc')).toBe(floors.SERVER_SLOT_GLIBC_FLOOR)
+    expect(slotGlibcFloor('linux-x64-glibc217')).toBe(floors.COMPAT_SLOT_GLIBC_FLOOR)
+    expect(floors.SERVER_SLOT_GLIBC_FLOOR.families[0]).toEqual({ prefix: 'GLIBC_', floor: [2, 28] })
+    expect(floors.COMPAT_SLOT_GLIBC_FLOOR.families[0]).toEqual({ prefix: 'GLIBC_', floor: [2, 17] })
+  })
+
+  it('keeps the compat slot out of the default matrix', () => {
+    expect(Object.keys(COMPAT_SLOTS)).toEqual(['linux-x64-glibc217'])
+    expect(isCompatSlot('linux-x64-glibc217')).toBe(true)
+    expect(isCompatSlot('linux-x64-glibc')).toBe(false)
+    expect(isCompatSlot('toString')).toBe(false)
+  })
+
+  it('refuses the compat label on a host that cannot build it', () => {
+    const host = { platform: 'linux', arch: 'x64', libc: 'glibc' }
+    expect(() => assertCompatSlotHost('linux-x64-glibc217', host)).not.toThrow()
+    expect(() => assertCompatSlotHost('linux-x64-glibc217', { ...host, arch: 'arm64' })).toThrow(
+      'linux-x64-glibc217 must be built on linux-x64-glibc, not linux-arm64-glibc'
+    )
+    expect(() => assertCompatSlotHost('linux-x64-glibc217', { ...host, libc: 'musl' })).toThrow()
+    expect(() => assertCompatSlotHost('linux-arm64-musl', { ...host, libc: 'musl' })).not.toThrow()
+  })
+
+  it('names shared C++ runtime needs a static compat slot must not have', () => {
+    expect(
+      findSharedCxxRuntimeNeeds(
+        new Set(['libc.so.6', 'libstdc++.so.6', 'libutil.so.1', 'libgcc_s.so.1'])
+      )
+    ).toEqual(['libgcc_s.so.1', 'libstdc++.so.6'])
+    expect(findSharedCxxRuntimeNeeds(new Set(['libc.so.6', 'libutil.so.1']))).toEqual([])
   })
 })
 

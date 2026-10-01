@@ -120,10 +120,14 @@ host against the pinned Node's hash-verified headers at N-API 8, and files it un
 `darwin-{x64,arm64}` or `win32-{x64,arm64}`. Its `manifest.json` records each file's
 sha256, the N-API level and, for glibc slots, the highest `GLIBC_` version the binary
 needs; the loader checks N-API, libc, arch and that glibc version before it installs a
-slot. glibc slots must pass the Ubuntu 20.04 floor gate above; musl slots skip it, since
-they never meet Ubuntu's libraries. libc is part of the slot name
-because node-pty's own loader falls back to `prebuilds/<platform>-<arch>` and cannot tell
-glibc from musl — a glibc binary parked there is loaded on Alpine and dies at `dlopen`.
+slot. glibc slots are built in a `manylinux_2_28` (AlmaLinux 8) container and pass the
+same gate at a **glibc 2.28 / `GLIBCXX_3.4.25`** floor instead of the desktop's 2.31, because
+the pinned Node they ship beside already runs on 2.28 and a 2.31 slot would leave 2.28–2.30
+hosts with a runtime but no terminal (design D6). The container's gcc-toolset supplies C++20
+and links newer libstdc++ symbols statically, so the slot needs only RHEL 8's system
+libstdc++. musl slots skip the gate, since they never meet glibc's libraries. libc is part
+of the slot name because node-pty's own loader falls back to `prebuilds/<platform>-<arch>`
+and cannot tell glibc from musl — a glibc binary parked there is loaded on Alpine and dies at `dlopen`.
 The script refuses to compile a tree where `config/patches/node-pty@1.1.0.patch` is not
 applied: without the patch the prebuilt is a #9902 crash shipped as an artifact rather
 than a first-connect error. CI runs it once per slot inside the matching container
@@ -132,13 +136,20 @@ a hole in the matrix; `--require-slots <slot>` checks one slot's files against t
 hashes and `--smoke` loads it under the pinned Node and spawns a PTY
 (`.github/workflows/node-server-tests.yml` runs both on every slot's runner).
 
-The prebuild script applies the Ubuntu 20.04 static floor gate only on glibc
+The prebuild script applies the slot's static floor gate only on glibc
 build hosts. Musl has no glibc symbol versions or `libutil.so.1` provider, so
 applying that gate would reject a valid musl addon. The decision uses the Node
 runtime report, independently of the forced `--slot` label; an unavailable
 Linux report stops the build. The desktop packaging gate is unchanged. Validate
 musl prebuilds by loading the emitted addon and spawning a shell in the matching
 musl container; skipping the glibc floor does not establish runtime compatibility.
+
+The opt-in `linux-x64-glibc217` compat slot (rung B, not part of the default matrix) is
+built in `manylinux2014_x86_64` (glibc 2.17, devtoolset C++20) with `-static-libstdc++`,
+gated at a glibc 2.17 floor, refused if `libstdc++.so`/`libgcc_s.so` remains in
+`DT_NEEDED`, and smoked under the unofficial glibc-217 Node pinned in
+`NODE_RUNTIME_COMPAT_ASSETS`. Nothing installs it yet: the loader and the SSH deploy
+still choose only default slots.
 
 ## Adding or upgrading a native dependency
 
