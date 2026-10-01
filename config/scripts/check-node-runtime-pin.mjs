@@ -2,15 +2,16 @@
 // Static, offline consistency gate for src/shared/node-runtime-pin.ts; update-node-runtime-pin.mjs owns the network.
 
 import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parseAllDocuments } from 'yaml'
-import {
-  NODE_RUNTIME_ASSETS,
-  NODE_RUNTIME_PIN,
-  SERVER_TARGETS
-} from '../../src/shared/node-runtime-pin.ts'
-import { nodeDistArchiveName } from './update-node-runtime-pin.mjs'
+import { nodeDistArchiveName, windowsImportLibFile } from './node-dist-archive-name.mjs'
+
+// Why require: an ESM import of a .ts file under a typeless package.json prints MODULE_TYPELESS_PACKAGE_JSON.
+const { NODE_RUNTIME_ASSETS, NODE_RUNTIME_PIN, SERVER_TARGETS } = createRequire(import.meta.url)(
+  '../../src/shared/node-runtime-pin.ts'
+)
 
 const SHA256 = /^[0-9a-f]{64}$/
 const ASSET_SOURCES = new Set(['official', 'unofficial'])
@@ -71,6 +72,19 @@ export function findNodeRuntimePinProblems({ pin, assets, targets, packageJson, 
   }
   if (pin.headers?.file !== `node-v${pin.version}-headers.tar.gz`) {
     problems.push(`NODE_RUNTIME_PIN.headers.file ${pin.headers?.file} is not for ${pin.version}`)
+  }
+  for (const target of targets.filter((name) => name.startsWith('win32-'))) {
+    const lib = pin.windowsImportLibs?.[target]
+    if (lib?.file !== windowsImportLibFile(target)) {
+      problems.push(
+        `NODE_RUNTIME_PIN.windowsImportLibs.${target}.file is not ${windowsImportLibFile(target)}`
+      )
+    }
+    if (!SHA256.test(lib?.sha256 ?? '')) {
+      problems.push(
+        `NODE_RUNTIME_PIN.windowsImportLibs.${target}.sha256 is not a 64-character hex SHA-256`
+      )
+    }
   }
 
   const expected = new Set(targets)

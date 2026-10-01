@@ -23,7 +23,8 @@ import {
   nodeRuntimeExecutablePath,
   nodeRuntimeReleaseUrl
 } from '../../src/shared/node-runtime-pin.ts'
-import { currentTarget } from './build-orcad-bun.mjs'
+import { currentTarget } from './server-build-target.mjs'
+import { nodeDistArchiveName, windowsImportLibFile } from './node-dist-archive-name.mjs'
 import { runProcessSync } from './script-child-process.mjs'
 import { getZipExtractorCommand } from './zip-extractor-command.mjs'
 
@@ -34,22 +35,20 @@ const GENERATED_END = '// @generated-end'
 const RELEASE_KEYRING_URL =
   'https://raw.githubusercontent.com/nodejs/release-keys/HEAD/gpg/pubring.kbx'
 
-/** Node's platform suffix for each server target; nodejs.org names Windows `win`, not `win32`. */
-export const NODE_DIST_PLATFORMS = {
-  'darwin-arm64': 'darwin-arm64',
-  'darwin-x64': 'darwin-x64',
-  'linux-arm64-glibc': 'linux-arm64',
-  'linux-x64-glibc': 'linux-x64',
-  'linux-arm64-musl': 'linux-arm64-musl',
-  'linux-x64-musl': 'linux-x64-musl',
-  'win32-arm64': 'win-arm64',
-  'win32-x64': 'win-x64'
-}
+const WINDOWS_TARGETS = SERVER_TARGETS.filter((target) => target.startsWith('win32-'))
 
-export function nodeDistArchiveName(version, target) {
-  // Why .tar.gz over .tar.xz: every POSIX host can extract gzip; xz is not guaranteed.
-  const extension = target.startsWith('win32-') ? 'zip' : 'tar.gz'
-  return `node-v${version}-${NODE_DIST_PLATFORMS[target]}.${extension}`
+/** SHASUMS256.txt is signature-verified before this runs, so its node.lib hashes are trusted as-is. */
+export function pinWindowsImportLibs(officialHashes) {
+  const libs = {}
+  for (const target of WINDOWS_TARGETS) {
+    const file = windowsImportLibFile(target)
+    const sha256 = officialHashes.get(file)
+    if (!sha256) {
+      throw new Error(`SHASUMS256.txt lists no ${file}`)
+    }
+    libs[target] = { file, sha256 }
+  }
+  return libs
 }
 
 export function parseShasums(text) {
@@ -92,6 +91,14 @@ export function renderGeneratedBlock(pin, assets) {
     '  headers: {',
     `    file: '${pin.headers.file}',`,
     `    sha256: '${pin.headers.sha256}'`,
+    '  },',
+    '  windowsImportLibs: {',
+    ...WINDOWS_TARGETS.flatMap((target, index) => [
+      `    '${target}': {`,
+      `      file: '${pin.windowsImportLibs[target].file}',`,
+      `      sha256: '${pin.windowsImportLibs[target].sha256}'`,
+      index === WINDOWS_TARGETS.length - 1 ? '    }' : '    },'
+    ]),
     '  }',
     '}',
     '',
@@ -136,7 +143,7 @@ async function fetchText(url) {
   return response.text()
 }
 
-async function download(url, destination) {
+export async function download(url, destination) {
   const response = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(600_000) })
   if (!response.ok || !response.body) {
     await response.body?.cancel()
@@ -145,7 +152,7 @@ async function download(url, destination) {
   await pipeline(Readable.fromWeb(response.body), createWriteStream(destination))
 }
 
-async function sha256File(path) {
+export async function sha256File(path) {
   const hash = createHash('sha256')
   await pipeline(createReadStream(path), hash)
   return hash.digest('hex')
@@ -167,7 +174,7 @@ function tarProgram() {
     : 'tar'
 }
 
-function extract(archivePath, destination, member) {
+export function extract(archivePath, destination, member) {
   mkdirSync(destination, { recursive: true })
   if (archivePath.endsWith('.zip')) {
     const command = getZipExtractorCommand(archivePath, destination)
@@ -326,7 +333,13 @@ async function main() {
         unofficialHashes
       })
     }
-    const pin = { version, electron: pinnedElectronVersion(), napi, headers }
+    const pin = {
+      version,
+      electron: pinnedElectronVersion(),
+      napi,
+      headers,
+      windowsImportLibs: pinWindowsImportLibs(officialHashes)
+    }
     const source = readFileSync(PIN_FILE, 'utf8')
     writeFileSync(PIN_FILE, replaceGeneratedBlock(source, renderGeneratedBlock(pin, assets)))
     console.log(`Wrote ${PIN_FILE}. Run check-node-runtime-pin.mjs before committing.`)

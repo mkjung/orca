@@ -23,6 +23,7 @@ import {
   ORCAD_INSTALL_COMPLETE_FILENAME,
   ORCAD_VERSION_FILENAME
 } from '../../shared/orcad-artifacts'
+import { isWindowsRemoteHost, type RemoteHostPlatform } from './ssh-remote-platform'
 
 export type RemoteInstallModelId = 'relay' | 'orcad'
 
@@ -35,7 +36,7 @@ export type RemoteInstallModel = {
   readonly versionFilename: string
   readonly installCompleteFilename: string
   /** Files whose absence means a torn install, so the probe forces a re-deploy. */
-  requiredArtifacts(isWindows: boolean): string[]
+  requiredArtifacts(host: RemoteHostPlatform): string[]
 }
 
 export const RELAY_INSTALL_MODEL: RemoteInstallModel = {
@@ -44,7 +45,7 @@ export const RELAY_INSTALL_MODEL: RemoteInstallModel = {
   nativeDepsPackageName: 'orca-relay',
   versionFilename: RELAY_VERSION_FILENAME,
   installCompleteFilename: RELAY_INSTALL_COMPLETE_FILENAME,
-  requiredArtifacts: (isWindows) => relayArtifactFilenames(isWindows)
+  requiredArtifacts: (host) => relayArtifactFilenames(isWindowsRemoteHost(host))
 }
 
 export const ORCAD_INSTALL_MODEL: RemoteInstallModel = {
@@ -53,7 +54,8 @@ export const ORCAD_INSTALL_MODEL: RemoteInstallModel = {
   nativeDepsPackageName: 'orca-orcad',
   versionFilename: ORCAD_VERSION_FILENAME,
   installCompleteFilename: ORCAD_INSTALL_COMPLETE_FILENAME,
-  requiredArtifacts: (isWindows) => orcadArtifactFilenames(isWindows ? 'win32' : '')
+  // libc changes no file name, so `<os>-<arch>` names every slot file.
+  requiredArtifacts: (host) => orcadArtifactFilenames(`${host.os}-${host.arch}`)
 }
 
 export const REMOTE_INSTALL_MODELS: readonly RemoteInstallModel[] = [

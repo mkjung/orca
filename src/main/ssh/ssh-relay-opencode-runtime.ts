@@ -6,7 +6,7 @@ import { waitForPromiseWithSignal } from '../../shared/abort-signal-reason'
 import { ORCAD_BUN_RELEASE_ASSETS, type OrcadBunTarget } from '../../shared/orcad-bun-runtime'
 import type { SshConnection } from './ssh-connection'
 import { resolveOrcadDeploymentTarget } from './orcad-deployment-target'
-import { materializeCachedOrcadBunRuntime } from './orcad-bun-runtime-materializer'
+import { materializeCachedOrcadBunRuntime } from './pinned-runtime-materializer'
 import { execCommand, isUnconfirmedSshCommandTermination } from './ssh-relay-deploy-helpers'
 import { uploadRelayDirectory, writeRelayFile } from './ssh-relay-install-transfers'
 import {

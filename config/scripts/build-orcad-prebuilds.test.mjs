@@ -1,14 +1,25 @@
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync
+} from 'node:fs'
 import { spawnSync } from 'node:child_process'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   assertNodePtyPatchApplied,
+  bindingGypForLibc,
+  ptySourceForLibc,
   detectLibc,
   MATRIX_SLOTS,
-  mergeManifest,
   readManifest,
+  requestedSlots,
   slotName
 } from './build-orcad-prebuilds.mjs'
 
@@ -80,7 +91,21 @@ describe('slot naming', () => {
       'linux-arm64-glibc',
       'linux-arm64-musl',
       'linux-x64-glibc',
-      'linux-x64-musl'
+      'linux-x64-musl',
+      'win32-arm64',
+      'win32-x64'
+    ])
+  })
+
+  it('requires the whole matrix by default and only the named slots otherwise', () => {
+    expect(requestedSlots(['node', 'x'])).toBeNull()
+    expect(requestedSlots(['node', 'x', '--require-slots'])).toEqual(MATRIX_SLOTS)
+    expect(requestedSlots(['node', 'x', '--require-slots', 'darwin-arm64'])).toEqual([
+      'darwin-arm64'
+    ])
+    expect(requestedSlots(['node', 'x', '--require-slots=win32-x64,win32-arm64'])).toEqual([
+      'win32-x64',
+      'win32-arm64'
     ])
   })
 
@@ -104,26 +129,59 @@ describe('slot naming', () => {
   })
 })
 
-describe('mergeManifest', () => {
-  it('accumulates slots across the per-container CI runs that build them', () => {
-    // Overwriting would erase every other container's record, and the release gate would
-    // then reject a matrix that is actually complete.
-    const first = mergeManifest(null, { slot: 'linux-x64-glibc', version: '1.1.0', nodeAbi: '127' })
-    const second = mergeManifest(first, {
-      slot: 'linux-arm64-musl',
-      version: '1.1.0',
-      nodeAbi: '127'
-    })
+describe('bindingGypForLibc', () => {
+  const gyp =
+    "'ldflags': [\n  '-Wl,--no-as-needed,-l:libutil.so.1,-l:libpthread.so.0,--as-needed'\n]"
 
-    expect(second.slots).toEqual(['linux-arm64-musl', 'linux-x64-glibc'])
-    expect(second).toMatchObject({ module: 'node-pty', version: '1.1.0', nodeAbi: '127' })
+  it('keeps the glibc DT_NEEDED ldflag everywhere but musl', () => {
+    expect(bindingGypForLibc(gyp, 'glibc')).toBe(gyp)
+    expect(bindingGypForLibc(gyp, 'none')).toBe(gyp)
   })
 
-  it('does not duplicate a slot rebuilt twice', () => {
-    const once = mergeManifest(null, { slot: 'darwin-arm64', version: '1.1.0', nodeAbi: '127' })
-    expect(
-      mergeManifest(once, { slot: 'darwin-arm64', version: '1.1.0', nodeAbi: '127' }).slots
-    ).toEqual(['darwin-arm64'])
+  it('drops it on musl, which has no libutil.so.1 to link', () => {
+    expect(bindingGypForLibc(gyp, 'musl')).not.toContain('libutil.so.1')
+  })
+
+  it('matches the binding.gyp the installed patch produces', () => {
+    const require = createRequire(import.meta.url)
+    const installed = readFileSync(
+      join(dirname(require.resolve('node-pty/package.json')), 'binding.gyp'),
+      'utf8'
+    )
+    expect(bindingGypForLibc(installed, 'musl')).not.toContain('-l:libutil.so.1')
+  })
+
+  it('fails loudly if the patch stops carrying the flag it strips', () => {
+    expect(() => bindingGypForLibc("'ldflags': []", 'musl')).toThrow(/no longer carries/)
+  })
+})
+
+describe('ptySourceForLibc', () => {
+  const source =
+    '#if defined(__linux__)\n#  if defined(__x86_64__)\n#    define ORCA_GLIBC_COMPAT_VERSION "GLIBC_2.2.5"\n'
+
+  it('keeps the glibc .symver pins everywhere but musl', () => {
+    expect(ptySourceForLibc(source, 'glibc')).toBe(source)
+    expect(ptySourceForLibc(source, 'none')).toBe(source)
+  })
+
+  it('scopes them to glibc on musl, whose libc has no GLIBC_ versions to bind', () => {
+    expect(ptySourceForLibc(source, 'musl')).toMatch(
+      /^#if defined\(__linux__\) && defined\(__GLIBC__\)\n/
+    )
+  })
+
+  it('matches the pty.cc the installed patch produces', () => {
+    const require = createRequire(import.meta.url)
+    const installed = readFileSync(
+      join(dirname(require.resolve('node-pty/package.json')), 'src', 'unix', 'pty.cc'),
+      'utf8'
+    )
+    expect(ptySourceForLibc(installed, 'musl')).toContain('defined(__GLIBC__)')
+  })
+
+  it('fails loudly if the patch stops carrying the guard it scopes', () => {
+    expect(() => ptySourceForLibc('int main() {}', 'musl')).toThrow(/no longer carries/)
   })
 })
 
@@ -145,20 +203,60 @@ describe('prebuild floor gate', () => {
     mkdirSync(scripts, { recursive: true })
     mkdirSync(join(moduleDir, 'build', 'Release'), { recursive: true })
     mkdirSync(join(moduleDir, 'src', 'unix'), { recursive: true })
+    mkdirSync(join(moduleDir, 'scripts'), { recursive: true })
+    writeFileSync(join(moduleDir, 'scripts', 'orca-glibc.py'), '# compiler probe fixture')
+    mkdirSync(join(root, 'src', 'shared'), { recursive: true })
+    copyFileSync(
+      new URL('../../src/shared/node-runtime-pin.ts', import.meta.url),
+      join(root, 'src', 'shared', 'node-runtime-pin.ts')
+    )
+    copyFileSync(
+      new URL('./orcad-prebuild-slot-contents.mjs', import.meta.url),
+      join(scripts, 'orcad-prebuild-slot-contents.mjs')
+    )
+    const apiDir = join(root, 'node_modules', 'node-addon-api')
+    mkdirSync(apiDir, { recursive: true })
+    writeFileSync(join(apiDir, 'package.json'), JSON.stringify({ name: 'node-addon-api' }))
+    writeFileSync(
+      join(scripts, 'pinned-node-downloads.mjs'),
+      'export async function preparePinnedNodeDir({ workDir }) { return workDir }'
+    )
+    writeFileSync(
+      join(scripts, 'script-child-process.mjs'),
+      `import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+       import { join } from 'node:path';
+       export function runProcessSync({ cwd }) {
+         if (!existsSync(join(cwd, 'scripts', 'orca-glibc.py'))) {
+           throw new Error('compiler probe missing from staged sources');
+         }
+         mkdirSync(join(cwd, 'build', 'Release'), { recursive: true });
+         writeFileSync(join(cwd, 'build', 'Release', 'pty.node'), 'fixture');
+         return { code: 0 };
+       }`
+    )
     copyFileSync(
       new URL('./build-orcad-prebuilds.mjs', import.meta.url),
       join(scripts, 'build-orcad-prebuilds.mjs')
     )
     writeFileSync(join(moduleDir, 'package.json'), JSON.stringify({ version: '1.1.0' }))
     writeFileSync(join(moduleDir, 'binding.gyp'), PATCHED_BINDING_GYP)
-    writeFileSync(join(moduleDir, 'src', 'unix', 'pty.cc'), PATCHED_PTY_CC)
+    writeFileSync(
+      join(moduleDir, 'src', 'unix', 'pty.cc'),
+      `#if defined(__linux__) && defined(__GLIBC__)
+#  if defined(__x86_64__)
+#    define ORCA_GLIBC_COMPAT_VERSION "GLIBC_2.2.5"
+${PATCHED_PTY_CC}`
+    )
     writeFileSync(join(moduleDir, 'build', 'Release', 'pty.node'), 'fixture')
     writeFileSync(
       join(scripts, 'verify-linux-glibc-floor.cjs'),
       `exports.verifyLinuxGlibcFloor = () => {
         console.log('floor gate called');
         if (${reject}) throw new Error('floor rejected fixture');
-      };`
+      };
+      exports.collectNativeBinaries = (dir) => [require('node:path').join(dir, 'pty.node')];
+      exports.findArchViolation = () => null;
+      exports.readDynamicInfo = () => ({ versionNeeds: [] });`
     )
     const preload = join(root, 'platform.cjs')
     writeFileSync(
@@ -176,7 +274,7 @@ describe('prebuild floor gate', () => {
       ],
       { encoding: 'utf8', timeout: 10000, windowsHide: true }
     )
-    return { ...result, manifest: join(root, 'out', 'orcad', 'prebuilds', 'manifest.json') }
+    return { ...result, manifest: join(root, 'out', 'orcad-prebuilds', 'manifest.json') }
   }
 
   it('publishes a musl slot without applying Ubuntu glibc requirements', () => {
@@ -184,6 +282,11 @@ describe('prebuild floor gate', () => {
     expect(result.status, result.stderr).toBe(0)
     expect(result.stdout).not.toContain('floor gate called')
     expect(existsSync(result.manifest)).toBe(true)
+    expect(readManifest(dirname(result.manifest))).toMatchObject({
+      schemaVersion: 2,
+      napi: 8,
+      slots: { [`linux-${process.arch}-musl`]: { libc: 'musl', glibc: null } }
+    })
   })
 
   it('gates glibc artifacts before publishing the manifest', () => {
