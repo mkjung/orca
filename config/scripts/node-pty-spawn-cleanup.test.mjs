@@ -4,6 +4,7 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { detectLibc } from './build-orcad-prebuilds.mjs'
 
 const require = createRequire(import.meta.url)
 const {
@@ -13,6 +14,7 @@ const root = resolve(import.meta.dirname, '..', '..')
 const fixtures = join(import.meta.dirname, '__fixtures__')
 const stock = readFileSync(join(fixtures, 'node-pty-1.1.0-unix-pty.cc'), 'utf8')
 const temporary = []
+const supportsNativeSpawn = ['linux', 'darwin'].includes(process.platform)
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -30,7 +32,11 @@ function run(command, args, options = {}) {
 function probe(addon, env = {}) {
   const result = run(
     process.execPath,
-    [join(fixtures, 'node-pty-spawn-failure-probe.cjs'), addon],
+    [
+      join(fixtures, 'node-pty-spawn-failure-probe.cjs'),
+      addon,
+      process.platform === 'darwin' ? join(dirname(addon), 'spawn-helper') : ''
+    ],
     {
       env: { ...process.env, ...env }
     }
@@ -96,14 +102,22 @@ it('keeps desktop and relay cleanup identical on both Unix spawn paths', () => {
   }
 })
 
-// The fault-injected addon exercises Linux's actual forkpty parent path.
-describe.skipIf(process.platform !== 'linux')('node-pty failed spawn resource ownership', () => {
+// Exercise the host's real forkpty or posix_spawn path with failures after spawning.
+describe.skipIf(!supportsNativeSpawn)('node-pty failed spawn resource ownership', () => {
   for (const kind of ['desktop', 'relay']) {
     describe(kind, () => {
       let addon
       beforeAll(() => {
         const staged = stageSource(kind)
-        const injection = readFileSync(join(fixtures, 'node-pty-spawn-failure-injection.h'), 'utf8')
+        const injection = readFileSync(
+          join(
+            fixtures,
+            process.platform === 'darwin'
+              ? 'node-pty-spawn-failure-injection-macos.h'
+              : 'node-pty-spawn-failure-injection.h'
+          ),
+          'utf8'
+        )
         const source = staged.source
           .replace('struct ExitEvent {', `${injection}\nstruct ExitEvent {`)
           .replace(
@@ -119,11 +133,28 @@ describe.skipIf(process.platform !== 'linux')('node-pty failed spawn resource ow
         const napiHeaders = dirname(
           require.resolve('node-addon-api', { paths: [require.resolve('node-pty')] })
         )
+        if (process.platform === 'darwin') {
+          run('c++', [
+            '-std=c++17',
+            join(dirname(require.resolve('node-pty/package.json')), 'src/unix/spawn-helper.cc'),
+            '-o',
+            join(staged.dir, 'spawn-helper')
+          ])
+        }
+        const linkerFlags =
+          process.platform === 'darwin'
+            ? ['-bundle', '-undefined', 'dynamic_lookup']
+            : [
+                '-shared',
+                '-fPIC',
+                '-pthread',
+                ...(detectLibc() === 'glibc'
+                  ? ['-Wl,--no-as-needed,-l:libutil.so.1,-l:libpthread.so.0,--as-needed']
+                  : [])
+              ]
         run('c++', [
-          '-shared',
-          '-fPIC',
+          ...linkerFlags,
           '-std=c++17',
-          '-pthread',
           '-DNAPI_CPP_EXCEPTIONS',
           '-I',
           nodeHeaders,
@@ -131,8 +162,7 @@ describe.skipIf(process.platform !== 'linux')('node-pty failed spawn resource ow
           napiHeaders,
           path,
           '-o',
-          addon,
-          '-Wl,--no-as-needed,-l:libutil.so.1,-l:libpthread.so.0,--as-needed'
+          addon
         ])
       })
       it.each(['F_GETFL', 'F_SETFL', 'F_GETFD', 'F_SETFD'])(
@@ -141,7 +171,7 @@ describe.skipIf(process.platform !== 'linux')('node-pty failed spawn resource ow
           probe(addon, { ORCA_PTY_TEST_FAILURE: failure })
         }
       )
-      it.each(['WAIT_INITIAL', 'WAIT_FINAL', 'KILL_EPERM'])(
+      it.skipIf(process.platform !== 'linux').each(['WAIT_INITIAL', 'WAIT_FINAL', 'KILL_EPERM'])(
         'reports incomplete child cleanup after %s without blocking on an unsignalled child',
         (failure) => {
           probe(addon, {
@@ -150,18 +180,24 @@ describe.skipIf(process.platform !== 'linux')('node-pty failed spawn resource ow
           })
         }
       )
-      it('reaps a child when its death races the termination signal', () => {
-        probe(addon, {
-          ORCA_PTY_TEST_FAILURE: 'F_SETFD',
-          ORCA_PTY_TEST_CLEANUP_FAILURE: 'KILL_ESRCH'
-        })
-      })
-      it('retries interrupted waits', () => {
+      it.skipIf(process.platform !== 'linux')(
+        'reaps a child when its death races the termination signal',
+        () => {
+          probe(addon, {
+            ORCA_PTY_TEST_FAILURE: 'F_SETFD',
+            ORCA_PTY_TEST_CLEANUP_FAILURE: 'KILL_ESRCH'
+          })
+        }
+      )
+      it.skipIf(process.platform !== 'linux')('retries interrupted waits', () => {
         probe(addon, { ORCA_PTY_TEST_FAILURE: 'F_SETFD', ORCA_PTY_TEST_EINTR: '1' })
       })
-      it('does not signal a child that has already been reaped', () => {
-        probe(addon, { ORCA_PTY_TEST_FAILURE: 'F_SETFD', ORCA_PTY_TEST_REAPED: '1' })
-      })
+      it.skipIf(process.platform !== 'linux')(
+        'does not signal a child that has already been reaped',
+        () => {
+          probe(addon, { ORCA_PTY_TEST_FAILURE: 'F_SETFD', ORCA_PTY_TEST_REAPED: '1' })
+        }
+      )
       it('transfers ownership and reports normal exit after a successful spawn', () => {
         probe(addon)
       })

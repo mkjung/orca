@@ -10,7 +10,7 @@ const exited = new Promise((resolve) => {
 try {
   result = addon.fork(
     '/bin/sh',
-    ['-c', 'exit 0'],
+    ['-c', process.platform === 'darwin' && failure ? 'exec /bin/sleep 5' : 'exit 0'],
     [],
     process.cwd(),
     80,
@@ -18,7 +18,7 @@ try {
     -1,
     -1,
     false,
-    '',
+    process.argv[3] || '',
     onexit
   )
 } catch (err) {
@@ -31,12 +31,12 @@ if (failure) {
   const cleanupFailure = process.env.ORCA_PTY_TEST_CLEANUP_FAILURE
   if (cleanupFailure && cleanupFailure !== 'KILL_ESRCH') {
     assert.match(error.message, new RegExp(`PTY child ${state.pid} cleanup failed:`))
+    // glibc and musl spell EIO differently.
     const reason =
-      cleanupFailure === 'KILL_EPERM' ? 'Operation not permitted' : 'Input/output error'
-    assert.ok(
-      error.message.endsWith(reason),
-      'spawn error must preserve the cleanup failure reason'
-    )
+      cleanupFailure === 'KILL_EPERM'
+        ? /Operation not permitted$/
+        : /(?:Input\/output error|I\/O error)$/
+    assert.match(error.message, reason, 'spawn error must preserve the cleanup failure reason')
     assert.equal(state.kills, cleanupFailure === 'WAIT_INITIAL' ? 0 : 1)
     assert.equal(state.blockingWaits, cleanupFailure === 'WAIT_FINAL' ? 1 : 0)
     if (cleanupFailure !== 'WAIT_FINAL') {
@@ -45,7 +45,9 @@ if (failure) {
   } else {
     assert.doesNotMatch(error.message, /cleanup failed/)
     assert.equal(state.childReaped, true, 'failed spawn must terminate and reap its child')
-    assert.equal(state.kills, process.env.ORCA_PTY_TEST_REAPED ? 0 : 1)
+    if (process.platform === 'linux') {
+      assert.equal(state.kills, process.env.ORCA_PTY_TEST_REAPED ? 0 : 1)
+    }
   }
   if (process.env.ORCA_PTY_TEST_EINTR) {
     assert.ok(state.waitInterrupts >= 2)
