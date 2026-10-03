@@ -134,14 +134,14 @@ function createDeps(overrides: Record<string, unknown> = {}) {
 // Why: activeRuntimeEnvironmentId exercises the remote-runtime path where the renderer still owns OSC 9999 status.
 
 describe('connectPanePty', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.resetModules()
     vi.clearAllMocks()
     transportFactoryQueue = []
     createdTransportOptions = []
     storeSubscribers = []
     mockStoreState = createInitialStoreState(() => mockStoreState)
-    installTerminalTestGlobals()
+    await installTerminalTestGlobals()
   })
 
   afterEach(async () => {
@@ -210,15 +210,14 @@ describe('connectPanePty', () => {
       paneKey
     })
     expect(mockStoreState.markWorktreeUnread).toHaveBeenCalledWith('wt-1')
-    expect(mockStoreState.markTerminalTabUnread).toHaveBeenCalledWith('tab-1')
-    expect(mockStoreState.markTerminalPaneUnread).toHaveBeenCalledWith(paneKey)
+    expect(mockStoreState.markTerminalTabUnread).toHaveBeenCalledWith('tab-1', 'agent-completion')
+    expect(mockStoreState.markTerminalPaneUnread).toHaveBeenCalledWith(paneKey, 'agent-completion')
     expect(window.api.notifications.dispatch).toHaveBeenCalledWith(
       expect.objectContaining({
         source: 'agent-task-complete',
         worktreeId: 'wt-1',
         repoLabel: 'orca',
         worktreeLabel: 'feat/notis',
-        hasMultipleActiveRepos: true,
         terminalTitle: '* Claude done',
         agentType: 'claude',
         agentState: 'done',
@@ -226,7 +225,7 @@ describe('connectPanePty', () => {
         agentToolName: 'Edit',
         agentToolInput: 'src/main/ipc/notifications.ts',
         agentLastAssistantMessage: 'Implemented the formatter.',
-        agentInterrupted: false
+        agentTurnOutcome: undefined
       })
     )
   })

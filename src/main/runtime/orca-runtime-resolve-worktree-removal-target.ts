@@ -1,7 +1,10 @@
 // @ts-nocheck -- mechanically split from OrcaRuntimeService; behavior is covered by AST equivalence and characterization tests.
 import { OrcaRuntimeWithRemoveManagedWorktree } from './orca-runtime-remove-managed-worktree'
 import type { ExecutionHostId } from '../../shared/execution-host'
-import type { RuntimeWorktreeRemovalTarget } from './runtime-worktree-selection'
+import type {
+  RemoveManagedWorktreeOptions,
+  RuntimeWorktreeRemovalTarget
+} from './runtime-worktree-selection'
 import { resolveRuntimeWorktreeRemovalTarget } from './runtime-worktree-removal-target'
 import type { RuntimeStore } from './runtime-store-contract'
 import { splitWorktreeId } from '../../shared/worktree/id'
@@ -10,18 +13,31 @@ import { hasWorktreeRemovalRepoOwnerOnOtherHost } from '../worktree-removal-repo
 import { advertisedUrlWatcher } from '../ports/advertised-url-watcher'
 import { deleteWorktreeHistoryDir } from '../terminal-history-deletion'
 import { closeClientHostedBrowserPagesForWorktree } from './worktree-browser-client-page-close'
-import type { ForceDeleteWorktreeBranchResult } from '../../shared/worktree/create-types'
+import type {
+  ForceDeleteWorktreeBranchResult,
+  RemoveWorktreeResult
+} from '../../shared/worktree/create-types'
 import type { RuntimeTerminalRename } from '../../shared/runtime-types'
 import type { TerminalWorkspaceLaunchScope } from './runtime-legacy-worker-terminal-recovery-types'
 import type { TerminalCreateOptions } from './runtime-terminal-contracts'
-import { resolveLocalWindowsAgentStartupShell } from '../../shared/windows-terminal-shell'
 import { isTuiAgentEnabled } from '../../shared/tui-agent-selection'
+import { terminalShellOverrideRefusal } from './terminal-shell-override-host-support'
+import { resolveTerminalStartupCwd } from '../../shared/terminal-startup-cwd'
+import { resolveLocalProjectRuntimeForWorktreeId } from '../local-project-runtime-resolution'
 import { resolveBareAgentLaunchCommand } from './runtime-agent-launch-resolution'
 import { buildAgentStartupPlan } from '../../shared/tui-agent-startup'
+import { resolveAgentStartupPlanInputs } from '../../shared/agent-startup-plan-inputs'
+import { agentStartedTelemetry } from '../agent-launch/agent-started-telemetry'
+import { LOCAL_EXECUTION_HOST_ID, parseExecutionHostId } from '../../shared/execution-host'
+import { invalidateAuthorizedRootsCache } from '../ipc/filesystem-auth'
 import {
-  resolveTuiAgentLaunchArgs,
-  resolveTuiAgentLaunchEnv
-} from '../../shared/tui-agent-launch-defaults'
+  resumeInterruptedWorktreeRemovals,
+  retryFailedWorktreeRemoval,
+  waitForPendingWorktreeRemoval
+} from '../worktree-background-removal'
+import { interruptedLocalWorktreeRemovalJob } from './runtime-interrupted-local-worktree-removal'
+import { retryFailedRemovalUnlessRegistered } from '../worktree-removal-table'
+import type { GitWorktreeInfo } from '../../shared/worktree/types'
 
 export class OrcaRuntimeWithResolveWorktreeRemovalTarget extends OrcaRuntimeWithRemoveManagedWorktree {
   protected async resolveWorktreeRemovalTarget(
@@ -36,6 +52,82 @@ export class OrcaRuntimeWithResolveWorktreeRemovalTarget extends OrcaRuntimeWith
         this.resolveExplicitWorktreeIdScoped(worktreeId, hostId),
       ...(requiredHostId ? { requiredHostId } : {})
     })
+  }
+
+  /** Runs the same delete again for each local removal a quit or crash interrupted. */
+  finishInterruptedWorktreeRemovals(): void {
+    const store = this.store
+    if (!store) {
+      return
+    }
+    resumeInterruptedWorktreeRemovals((record) =>
+      interruptedLocalWorktreeRemovalJob(record, this.localRemovalJobHost(store))
+    )
+  }
+
+  /** The removal a request for this worktree waits on: the one still running. */
+  protected joinPendingWorktreeRemoval(
+    worktreeId: string,
+    options: RemoveManagedWorktreeOptions
+  ): Promise<RemoveWorktreeResult> | undefined {
+    return waitForPendingWorktreeRemoval(worktreeId, parseExecutionHostId(options.hostId)?.id)
+  }
+
+  /**
+   * Delete on the leftover of a local delete that failed after Git dropped the registration, while
+   * Git's listing still does not register the path: runs that removal again. True when it did.
+   */
+  protected retryFailedLocalRemoval(
+    route: { kind: string },
+    target: { id: string; path: string },
+    registeredWorktrees: readonly GitWorktreeInfo[],
+    options: RemoveManagedWorktreeOptions
+  ): boolean {
+    const store = this.store
+    if (route.kind !== 'local' || !store) {
+      return false
+    }
+    const hostId = parseExecutionHostId(options.hostId)?.id
+    const allowUnverifiedPtyStop = options.allowUnverifiedPtyStop === true
+    return retryFailedRemovalUnlessRegistered(target.id, target.path, registeredWorktrees, () =>
+      retryFailedWorktreeRemoval(target.id, hostId, (record) =>
+        interruptedLocalWorktreeRemovalJob(record, {
+          ...this.localRemovalJobHost(store),
+          stopPtys: () =>
+            this.stopPtysForDestructiveWorktreeRemoval(record.worktreeId, {
+              allowUnverifiedStop: allowUnverifiedPtyStop
+            })
+        })
+      )
+    )
+  }
+
+  protected localRemovalJobHost(store: RuntimeStore) {
+    return {
+      store,
+      acquireWatcherRemoval: this.acquireFileWatcherRemoval,
+      closeWatchers: (path) => this.closeFileWatchersForRemoval(path),
+      preservedBranchCleanup: this.preservedBranchCleanup,
+      purge: ({ worktreeId, repoId }) =>
+        this.purgeRemovedWorktree(store, worktreeId, repoId, LOCAL_EXECUTION_HOST_ID),
+      onRemoved: ({ worktreeId, worktreePath }) =>
+        this.emitWorktreeLifecycle({ kind: 'removed', worktreeId, path: worktreePath }),
+      publish: (repoId) => this.publishWorktreeRemovalChange(repoId)
+    }
+  }
+
+  // Host state every removal path drops once Git has let go of the checkout.
+  protected purgeRemovedWorktree(
+    store: RuntimeStore,
+    worktreeId: string,
+    repoId: string,
+    removalHostId?: ExecutionHostId
+  ): void {
+    this.clearOptimisticReconcileToken(worktreeId)
+    this.removeWorktreeMetadataAndHistory(store, worktreeId, removalHostId)
+    this.invalidateResolvedWorktreeCache()
+    this.invalidateWorktreeScanCacheForRepo(repoId)
+    invalidateAuthorizedRootsCache()
   }
 
   protected removeWorktreeMetadataAndHistory(
@@ -134,7 +226,13 @@ export class OrcaRuntimeWithResolveWorktreeRemovalTarget extends OrcaRuntimeWith
           return { handle, tabId: leaf.tabId, title }
         }
       }
-      return { handle, tabId: pty.pty.tabId ?? pty.record.tabId, title }
+      const tabId = pty.pty.tabId ?? pty.record.tabId
+      // A notifier can exist before its pane graph; retain the rename on the known tab.
+      if (this.notifier?.renameTerminal && tabId) {
+        this.persistHeadlessTerminalTitle(pty.pty.worktreeId, tabId, title)
+        this.notifier.renameTerminal(tabId, title)
+      }
+      return { handle, tabId, title }
     }
     this.assertGraphReady()
     const { leaf } = this.getLiveLeafForHandle(handle)
@@ -146,6 +244,23 @@ export class OrcaRuntimeWithResolveWorktreeRemovalTarget extends OrcaRuntimeWith
     workspace: TerminalWorkspaceLaunchScope,
     opts: TerminalCreateOptions
   ): Promise<TerminalCreateOptions> {
+    // Before any early return: every create lane funnels through here, and a host that cannot
+    // apply the requested shell must refuse rather than spawn its default one.
+    const shellRefusal = terminalShellOverrideRefusal({
+      shellOverride: opts.shellOverride,
+      connectionId: workspace.connectionId,
+      platform: process.platform,
+      projectRuntime:
+        opts.shellOverride && this.store
+          ? resolveLocalProjectRuntimeForWorktreeId(this.store, workspace.id)
+          : undefined,
+      // Same resolution as the spawn lanes below, so the refusal judges the cwd the PTY gets.
+      cwd: resolveTerminalStartupCwd(workspace.path, opts.cwd) ?? workspace.path,
+      workspacePath: workspace.path
+    })
+    if (shellRefusal) {
+      throw shellRefusal
+    }
     // Why: raw shell commands like `codex exec` must remain user-authored shell.
     // Only unmanaged, repo-backed, bare agent launches get Settings defaults.
     const callerSuppliedLaunch =
@@ -177,11 +292,6 @@ export class OrcaRuntimeWithResolveWorktreeRemovalTarget extends OrcaRuntimeWith
     // Why: `workspace.repo` is display metadata and may be a row from another host; the launch
     // shape must match the PTY route this scope already resolved.
     const isRemote = Boolean(workspace.connectionId)
-    const queuedShell = resolveLocalWindowsAgentStartupShell({
-      platform,
-      isRemote,
-      terminalWindowsShell: settings.terminalWindowsShell
-    })
     if (opts.startupAgent && !isTuiAgentEnabled(opts.startupAgent, settings.disabledTuiAgents)) {
       throw new Error(`Agent ${opts.startupAgent} is disabled. Choose an enabled agent.`)
     }
@@ -197,18 +307,18 @@ export class OrcaRuntimeWithResolveWorktreeRemovalTarget extends OrcaRuntimeWith
       return opts
     }
 
-    const sessionOptions = this.toAgentSessionOptions(opts.launchPreferences)
     const startupPlan = buildAgentStartupPlan({
-      agent,
-      prompt: '',
-      cmdOverrides: settings.agentCmdOverrides ?? {},
-      agentArgs: resolveTuiAgentLaunchArgs(agent, settings.agentDefaultArgs),
-      agentEnv: resolveTuiAgentLaunchEnv(agent, settings.agentDefaultEnv),
-      sessionOptions,
-      sessionOptionsOverrideAgentArgs: Boolean(sessionOptions),
-      platform,
-      shell: queuedShell,
-      isRemote,
+      ...resolveAgentStartupPlanInputs({
+        agent,
+        settings,
+        platform,
+        isRemote,
+        ...(opts.agentArgs !== undefined ? { agentArgs: opts.agentArgs } : {}),
+        // A requested shell is the one this PTY will actually be, so it owns the quoting family.
+        windowsShellOverride: opts.shellOverride,
+        sessionOptions: this.toAgentSessionOptions(opts.launchPreferences)
+      }),
+      prompt: opts.startupPrompt ?? '',
       allowEmptyPromptLaunch: true
     })
     if (!startupPlan) {
@@ -219,8 +329,11 @@ export class OrcaRuntimeWithResolveWorktreeRemovalTarget extends OrcaRuntimeWith
       }
       return opts
     }
-
-    await this.markWorkspaceTrustedForAgent(agent, workspace.connectionId, workspace.path)
+    // A prompt this launch command cannot carry has nowhere to go from here — the create returns
+    // options, not a live PTY — so refuse rather than spawn the agent and drop the text.
+    if (opts.startupPrompt && startupPlan.followupPrompt) {
+      throw new Error(`Agent ${agent} does not take a startup prompt on its launch command.`)
+    }
 
     return {
       ...opts,
@@ -228,7 +341,9 @@ export class OrcaRuntimeWithResolveWorktreeRemovalTarget extends OrcaRuntimeWith
       ...(startupPlan.env ? { env: startupPlan.env } : {}),
       launchConfig: startupPlan.launchConfig,
       launchAgent: agent,
-      startupCommandDelivery: startupPlan.startupCommandDelivery
+      startupCommandDelivery: startupPlan.startupCommandDelivery,
+      // A bare command the user typed stays out of launch accounting, as before.
+      ...(opts.startupAgent ? { telemetry: agentStartedTelemetry(agent, opts.launchSource) } : {})
     }
   }
 }

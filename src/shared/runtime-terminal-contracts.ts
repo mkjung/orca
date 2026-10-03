@@ -1,4 +1,3 @@
-import type { AgentSessionPtyWriteRefusal } from './agent-session-pty-write-admission'
 import type {
   AgentProviderSessionMetadata,
   SleepingAgentLaunchConfig
@@ -18,6 +17,12 @@ export type RuntimeTerminalSummary = {
   ptyId: string | null
   incarnationId?: string | null
   orphaned?: boolean
+  /**
+   * Orphaned only: the pane the host last recorded for this PTY, which the renderer owning it can
+   * still hold even when its graph omitted that pane. Absent when none was recorded or the host
+   * predates the field.
+   */
+  recordedPaneKey?: string
   worktreeId: string
   worktreePath: string
   branch: string
@@ -210,11 +215,6 @@ export type RuntimeTerminalSend = {
   accepted: boolean
   bytesWritten: number
   refusedReason?: 'no-agent' | 'permission'
-  /**
-   * Present only when a durable agent-session lease refused the write. Additive and optional: an
-   * old client sees the `accepted: false` it already handles and ignores this field.
-   */
-  agentSessionRefusal?: AgentSessionPtyWriteRefusal
   prompt?: RuntimeTerminalPromptDelivery
 }
 
@@ -263,6 +263,8 @@ type RuntimeTerminalCreateBaseRequestPayload = {
   activate?: boolean
   presentation?: RuntimeTerminalPresentation
   surfaceOwner?: false
+  /** Windows shell the created tab spawns AS, instead of the host default. */
+  shellOverride?: string
 }
 
 export type RuntimeTerminalCreateRequestPayload =
@@ -326,10 +328,17 @@ export type RuntimeTerminalClose = {
   ptyKilled: boolean
   ptyStopVerdict?: 'live' | 'unverifiable'
   ptyStopReason?: string
+  /** The host durably recorded a kill order it replays when the PTY's SSH host reconnects.
+   *  Older hosts never send it, so a client promises no retry without it. */
+  pendingKillRecorded?: true
 }
 
 export type RuntimeTerminalWaitCondition = 'exit' | 'tui-idle'
 
+// Why both spellings: the codex-* members were published by every host before the agent-neutral
+// rename, so they are permanent — a client still has to read them off an older host. This build
+// keeps a codex-* reason only where the matched wording is plausibly Codex's own; every matcher
+// that inspects no agent publishes the agent-* spelling.
 export type RuntimeTerminalWaitBlockedReason =
   | 'codex-update-prompt'
   | 'codex-trust-workspace'
@@ -337,6 +346,11 @@ export type RuntimeTerminalWaitBlockedReason =
   | 'codex-model-migration-prompt'
   | 'codex-hooks-review-prompt'
   | 'codex-interactive-prompt'
+  | 'agent-update-prompt'
+  | 'agent-trust-workspace'
+  | 'agent-cwd-prompt'
+  | 'agent-hooks-review-prompt'
+  | 'agent-interactive-prompt'
   | 'agent-approval-prompt'
 
 export type RuntimeTerminalWait = {
