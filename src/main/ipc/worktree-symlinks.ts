@@ -123,17 +123,15 @@ async function createWorktreeLinkedPath(
           `[worktree-symlinks] ${backend.label} clone-copy unavailable for "${target}":`,
           error
         )
-        // Why: the fallback is a real byte-for-byte copy. If this entry was
-        // admitted as a free clone its bytes were never charged, so bill them
-        // now — and refuse if they no longer fit, rather than silently
-        // reopening the unbounded copy this budget exists to close.
-        if (mode === 'copy' && !(await realCopyFallbackAllowed())) {
-          throw new WorktreeCopyBudgetFallbackError(target)
-        }
       }
     }
   }
   if (mode === 'copy') {
+    // A successful admission probe can disagree with the actual target filesystem.
+    // Charge every real fallback, including an expected clone-unavailable result.
+    if (!(await realCopyFallbackAllowed())) {
+      throw new WorktreeCopyBudgetFallbackError(target)
+    }
     await copyWorktreePath(copySource, target)
     return
   }

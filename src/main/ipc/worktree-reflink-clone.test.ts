@@ -197,6 +197,11 @@ describe('cloneWorktreePathWithReflink', () => {
   })
 
   afterEach(() => {
+    for (const directory of [join(primary, 'node_modules'), join(worktree, 'node_modules')]) {
+      if (existsSync(directory)) {
+        chmodSync(directory, 0o700)
+      }
+    }
     rmSync(root, { recursive: true, force: true })
   })
 
@@ -248,20 +253,27 @@ describe('cloneWorktreePathWithReflink', () => {
     expect(probeLeftovers(worktree)).toEqual([])
   })
 
-  posixIt('reserves the directory, clones into it, and applies the source mode', async () => {
-    const source = join(primary, 'node_modules')
-    mkdirSync(join(source, 'pkg'), { recursive: true })
-    writeFileSync(join(source, 'pkg', 'index.js'), 'module.exports = 1\n')
-    chmodSync(source, 0o700)
-    const target = join(worktree, 'node_modules')
-    const deps = createDeps()
+  posixIt.each([0o700, 0o750, 0o500])(
+    'reserves a private directory and restores mode %i after cloning',
+    async (sourceMode) => {
+      const source = join(primary, 'node_modules')
+      mkdirSync(join(source, 'pkg'), { recursive: true })
+      writeFileSync(join(source, 'pkg', 'index.js'), 'module.exports = 1\n')
+      chmodSync(source, sourceMode)
+      const target = join(worktree, 'node_modules')
+      const deps = createDeps({
+        onTree: (_source, treeTarget) => {
+          expect(statSync(treeTarget).mode & 0o777).toBe(0o700)
+        }
+      })
 
-    await cloneWorktreePathWithReflink(source, target, true, deps)
+      await cloneWorktreePathWithReflink(source, target, true, deps)
 
-    expect(vi.mocked(deps.reflinkTree)).toHaveBeenCalledWith(source, target)
-    expect(statSync(target).mode & 0o777).toBe(0o700)
-    expect(readFileSync(join(target, 'pkg', 'index.js'), 'utf8')).toBe('module.exports = 1\n')
-  })
+      expect(vi.mocked(deps.reflinkTree)).toHaveBeenCalledWith(source, target)
+      expect(statSync(target).mode & 0o777).toBe(sourceMode)
+      expect(readFileSync(join(target, 'pkg', 'index.js'), 'utf8')).toBe('module.exports = 1\n')
+    }
+  )
 
   it('reports an existing directory target instead of merging into it', async () => {
     const source = join(primary, 'node_modules')
@@ -294,7 +306,7 @@ describe('cloneWorktreePathWithReflink', () => {
     expect(existsSync(target)).toBe(false)
   })
 
-  it('keeps a partly cloned directory for review when the tree clone fails midway', async () => {
+  posixIt('keeps a partly cloned directory private when the tree clone fails midway', async () => {
     const source = join(primary, 'node_modules')
     mkdirSync(source)
     writeFileSync(join(source, 'marker'), 'PRIMARY\n')
@@ -311,6 +323,7 @@ describe('cloneWorktreePathWithReflink', () => {
     })
 
     expect(readFileSync(join(target, 'marker'), 'utf8')).toBe('PARTIAL\n')
+    expect(statSync(target).mode & 0o777).toBe(0o700)
   })
 
   it('creates missing parent directories for a nested target', async () => {
