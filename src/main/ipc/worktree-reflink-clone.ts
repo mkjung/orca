@@ -202,8 +202,8 @@ async function cloneDirectoryWithReflink(
 
   try {
     // Why: the tree clone merges into the reserved directory and skips anything
-    // raced into it; the reservation was created with the default mode, so the
-    // source mode is applied afterwards.
+    // raced into it; the reservation stays private until the clone completes
+    // and the source mode is restored.
     await deps.reflinkTree(source, target)
     await chmod(target, sourceMode)
   } catch (error) {
