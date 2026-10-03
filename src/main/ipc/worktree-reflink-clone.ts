@@ -13,7 +13,7 @@ export type ReflinkCloneDeps = {
   /** The probe: `FICLONE` or nothing. Must throw rather than copy bytes when
    *  the filesystem cannot share blocks. */
   reflinkFileOrFail: (source: string, target: string) => Promise<void>
-  /** `FICLONE` per file, a byte copy for any file the kernel declines. */
+  /** Must fail when a file cannot share blocks so callers can budget a real copy. */
   reflinkFile: (source: string, target: string) => Promise<void>
   /** Recursive reflink of a directory's contents into an existing `target`
    *  that skips (never clobbers) whatever is already there. */
@@ -21,10 +21,7 @@ export type ReflinkCloneDeps = {
   randomUUID: () => string
 }
 
-// Why the clone itself is not forced: OpenZFS refuses to clone a block written
-// in the still-open transaction group (EAGAIN unless zfs_bclone_wait_dirty), so
-// a file touched seconds ago would fail a forced tree clone outright. Unforced,
-// that one file is copied byte-for-byte and everything else shares blocks.
+// A successful probe cannot guarantee every file will clone; only callers can budget fallback copies.
 //
 // Why the tree goes through coreutils rather than `fs.cp`: Node pays several
 // syscall round trips per file whether or not the kernel shares blocks, which
@@ -32,7 +29,7 @@ export type ReflinkCloneDeps = {
 // walks the tree in ~0.5 s. Same shape as the APFS backend's `/bin/cp -c`.
 export const defaultReflinkCloneDeps: ReflinkCloneDeps = {
   reflinkFileOrFail: (source, target) => copyFile(source, target, constants.COPYFILE_FICLONE_FORCE),
-  reflinkFile: (source, target) => copyFile(source, target, constants.COPYFILE_FICLONE),
+  reflinkFile: (source, target) => copyFile(source, target, constants.COPYFILE_FICLONE_FORCE),
   reflinkTree: async (source, target) => {
     // Why `-n`: the target directory is reserved before this runs, so a raced
     // nested file must be kept, not overwritten. `--update=none` is the modern
@@ -41,7 +38,7 @@ export const defaultReflinkCloneDeps: ReflinkCloneDeps = {
     // is a symlinked directory.
     const result = await runProcess({
       program: '/bin/cp',
-      args: ['-n', '-R', '--reflink=auto', `${source}${sep}.`, target],
+      args: ['-n', '-R', '--reflink=always', `${source}${sep}.`, target],
       timeoutMs: null
     })
     if (result.code !== 0) {
@@ -118,12 +115,7 @@ async function probeReflink(
     await deps.reflinkFileOrFail(probeSource, probeTarget)
     return true
   } catch {
-    // Why "no" even for EAGAIN (OpenZFS declining a block still in the open
-    // transaction group): the filesystem may well reflink, but this
-    // materialization's clones would then be unforced and could quietly copy
-    // bytes the budget never charged. The charged byte-copy path is the safe
-    // answer; the next materialization probes again. ENOTSUP (no feature),
-    // ENOTTY (block cloning off) and EXDEV (other filesystem) are plain "no".
+    // EAGAIN also means no clone now; admit a budgeted copy and probe again next materialization.
     return false
   } finally {
     await rm(probeTarget, { force: true }).catch(() => undefined)

@@ -117,11 +117,8 @@ describe('canCloneWithReflink', () => {
     expect(probeLeftovers(worktree)).toEqual([])
   })
 
-  // Why: EAGAIN is OpenZFS refusing a block still in the open transaction
-  // group. The filesystem may reflink, but saying "yes" would let unforced
-  // clones copy bytes the budget never charged — so it is a "no" for this
-  // materialization, and the charged byte-copy path runs instead.
-  it('answers no for EAGAIN so an uncharged clone cannot degrade into a byte copy', async () => {
+  // EAGAIN refuses the current clone even on a filesystem that supports reflinks.
+  it('answers no for EAGAIN so fallback bytes are charged before copying', async () => {
     const source = join(primary, '.env')
     writeFileSync(source, 'SECRET=1\n')
 
@@ -328,10 +325,7 @@ describe('cloneWorktreePathWithReflink', () => {
     expect(probeLeftovers(join(worktree, 'apps', 'web'))).toEqual([])
   })
 
-  // Why: the default tree clone is a real coreutils spawn; on tmpfs
-  // `--reflink=auto` degrades to a byte copy, so this exercises the process
-  // plumbing, no-clobber and symlink handling on any Linux host.
-  linuxIt('clones a tree with coreutils cp, keeping raced files and nested symlinks', async () => {
+  linuxIt('keeps raced files and symlinks while requiring real tree reflinks', async () => {
     const source = join(primary, 'node_modules')
     mkdirSync(join(source, 'pkg'), { recursive: true })
     writeFileSync(join(source, 'pkg', 'index.js'), 'module.exports = 1\n')
@@ -341,9 +335,15 @@ describe('cloneWorktreePathWithReflink', () => {
     mkdirSync(target)
     writeFileSync(join(target, 'marker'), 'RACED\n')
 
-    await defaultReflinkCloneDeps.reflinkTree(source, target)
-
-    expect(readFileSync(join(target, 'pkg', 'index.js'), 'utf8')).toBe('module.exports = 1\n')
+    const supported = await canCloneWithReflink(source, target)
+    const clone = defaultReflinkCloneDeps.reflinkTree(source, target)
+    if (supported) {
+      await clone
+      expect(readFileSync(join(target, 'pkg', 'index.js'), 'utf8')).toBe('module.exports = 1\n')
+    } else {
+      await expect(clone).rejects.toThrow(/cp --reflink exited/)
+      expect(existsSync(join(target, 'pkg', 'index.js'))).toBe(false)
+    }
     expect(readFileSync(join(target, 'marker'), 'utf8')).toBe('RACED\n')
     expect(lstatSync(join(target, 'entry.js')).isSymbolicLink()).toBe(true)
     expect(readlinkSync(join(target, 'entry.js'))).toBe(join('pkg', 'index.js'))
@@ -355,8 +355,7 @@ describe('cloneWorktreePathWithReflink', () => {
     ).rejects.toThrow(/cp --reflink exited 1/)
   })
 
-  // Why: the only host-dependent test here, and deliberately so — whatever the
-  // host's temp filesystem can do, the probe and the clone must agree on it.
+  // Whatever the host's temp filesystem can do, the probe and the clone must agree on it.
   // On ext4 or tmpfs the clone refuses; on btrfs, XFS with reflink, or OpenZFS
   // with block cloning it shares blocks. Run it with TMPDIR on each to see both.
   linuxIt('agrees with the real filesystem about whether it can share blocks', async () => {
