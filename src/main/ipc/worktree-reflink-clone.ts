@@ -73,7 +73,10 @@ async function findProbeFile(source: string): Promise<string | null> {
   const pending = [source]
   let seen = 0
   while (pending.length > 0) {
-    const directory = pending.shift() as string
+    const directory = pending.shift()
+    if (directory === undefined) {
+      break
+    }
     let entries: Dirent[]
     try {
       entries = await readdir(directory, { withFileTypes: true })
