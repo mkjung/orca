@@ -102,6 +102,7 @@ export const PROVIDER_FRAME_CLASSIFICATIONS = {
     'message:stream_event:content_block_start': 'status-chrome',
     'message:stream_event:content_block_delta': 'stream-into-item',
     'message:stream_event:content_block_stop': 'status-chrome',
+    'message:stream_event:ping': 'suppressed-benign',
     'message:system:compact_boundary': 'status-chrome',
     'message:system:status': 'status-chrome',
     'message:system:api_retry': 'status-chrome',
@@ -133,7 +134,8 @@ export const PROVIDER_FRAME_CLASSIFICATIONS = {
     'message:system:permission_denied': 'error-surface',
     'message:prompt_suggestion': 'status-chrome',
     'message:system:mirror_error': 'error-surface',
-    'message:system:informational': 'timeline-substantive',
+    // Written by its own row (`claude-informational-row`): a warning in its words, else nothing.
+    'message:system:informational': 'status-chrome',
     'message:conversation_reset': 'status-chrome',
     // A `started`/`completed`/`cancelled` state for one queued command uuid and
     // nothing else; the CLI keeps it out of its own transcript too. A state that
@@ -260,9 +262,8 @@ const CODEX_ITEM_CLASSIFICATIONS: Record<string, ProviderFrameClassification> = 
   // would leave that session's fan-out showing nothing.
   [CODEX_SUBAGENT_ITEM_TYPE]: 'status-chrome',
   // `{id, durationMs}` and nothing else — Codex's own transcript renders it as
-  // nothing at all. Every other item type this build does not model carries text
-  // a user would want (review output, an image path, hook prompt text), so those
-  // keep their visible fallback row.
+  // nothing at all. Every other item type this build does not model keeps its
+  // journaled fallback row; a chat draws it only when the row carries a sentence.
   sleep: 'status-chrome'
 }
 
@@ -278,24 +279,44 @@ export function isDeltaProviderFrameKind(kind: string): boolean {
   return notificationKind(kind).toLowerCase().endsWith('delta')
 }
 
-function catalogClassification(
-  provider: string,
-  kind: string
-): ProviderFrameClassification | undefined {
-  if (provider === 'codex') {
-    const item = itemKind(kind)
-    if (item !== null) {
-      return CODEX_ITEM_CLASSIFICATIONS[item]
+const CODEX_NOTIFICATION_CLASSIFICATIONS: Readonly<Record<string, ProviderFrameClassification>> =
+  PROVIDER_FRAME_CLASSIFICATIONS.codex
+const CLAUDE_FRAME_CLASSIFICATIONS: Readonly<Record<string, ProviderFrameClassification>> =
+  PROVIDER_FRAME_CLASSIFICATIONS.claude
+
+/** Each provider's own table, by provider id: an unlisted provider has none, so every frame it
+ *  sends that no rule above claims stays a visible row. */
+const PROVIDER_FRAME_CATALOGS: ReadonlyMap<
+  string,
+  (kind: string, payload: unknown) => ProviderFrameClassification | undefined
+> = new Map<
+  keyof ProviderFrameClassificationTable,
+  (kind: string, payload: unknown) => ProviderFrameClassification | undefined
+>([
+  [
+    'codex',
+    (kind) => {
+      const item = itemKind(kind)
+      if (item !== null) {
+        return CODEX_ITEM_CLASSIFICATIONS[item]
+      }
+      return CODEX_NOTIFICATION_CLASSIFICATIONS[notificationKind(kind)]
     }
-    return PROVIDER_FRAME_CLASSIFICATIONS.codex[
-      notificationKind(kind) as CodexAppServerNotificationMethod
-    ]
-  }
-  if (provider === 'claude') {
-    return PROVIDER_FRAME_CLASSIFICATIONS.claude[kind as ClaudeStreamJsonFrameKind]
-  }
-  return undefined
-}
+  ],
+  [
+    'claude',
+    (kind, payload) => {
+      if (kind === 'message:result') {
+        const subtype =
+          typeof payload === 'object' && payload !== null && 'subtype' in payload
+            ? payload.subtype
+            : undefined
+        return subtype === 'success' ? 'status-chrome' : 'error-surface'
+      }
+      return CLAUDE_FRAME_CLASSIFICATIONS[kind]
+    }
+  ]
+])
 
 export function classifyProviderFrame(
   provider: string,
@@ -311,12 +332,5 @@ export function classifyProviderFrame(
   if (isDeltaProviderFrameKind(kind)) {
     return 'stream-into-item'
   }
-  if (provider === 'claude' && kind === 'message:result') {
-    const subtype =
-      typeof payload === 'object' && payload !== null
-        ? (payload as Record<string, unknown>).subtype
-        : undefined
-    return subtype === 'success' ? 'status-chrome' : 'error-surface'
-  }
-  return catalogClassification(provider, kind) ?? 'timeline-substantive'
+  return PROVIDER_FRAME_CATALOGS.get(provider)?.(kind, payload) ?? 'timeline-substantive'
 }

@@ -240,10 +240,11 @@ describe('answerClaudePrompt', () => {
       journalPrompts: {
         resolve: resolvePrompt,
         handOver: () => () => {},
-        cancel: () => ({ accepted: true })
+        cancel: () => ({ accepted: true }),
+        openCards: () => [][Symbol.iterator](),
+        whenWritten: () => undefined
       },
       currentTurnId: null,
-      recordTurnStop: () => true,
       commandTurnId: null,
       beginCommand: vi.fn(),
       forgetCommand: vi.fn(),

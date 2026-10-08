@@ -15,6 +15,7 @@ import {
   REST_TEST_SESSION as SESSION,
   REST_TEST_THREAD as THREAD,
   restTestSend,
+  sweepOnce,
   sweepTicks,
   type RestTestRig
 } from './structured-agent-session-rest-test-rig'
@@ -74,7 +75,7 @@ describe('the idle sweep', () => {
     await rig.host.subscribe({ id: 'reader', sessionId: SESSION, emit: reader.emit })
     rig.clock.now += IDLE_MS + 1
 
-    await vi.waitFor(() => expect(rig.adapter.closeSession).toHaveBeenCalledWith(SESSION, 'evict'))
+    await vi.waitFor(() => expect(rig.adapter.closeSession).toHaveBeenCalledWith(SESSION))
     await vi.waitFor(() => expect(rig.store.getRecord(SESSION)?.lease.claimStatus).toBe('released'))
     await vi.waitFor(() => expect(rig.adapter.acknowledgeSessionRelease).toHaveBeenCalledOnce())
     expect(rig.adapter.acknowledgeSessionRelease).toHaveBeenCalledWith(SESSION)
@@ -96,20 +97,25 @@ describe('the idle sweep', () => {
   it('never stops an agent a message is queued for, and hands the message over (P2-08)', async () => {
     await foundRestTestChat(rig)
     rig.adapter.closeSession.mockClear()
-    // The loop takes the message and waits on the child's start, outside the lock.
-    const started = Promise.withResolvers<void>()
-    const awaitStarted = vi.fn(() => started.promise)
-    Object.assign(rig.host.deps.adapter, { awaitStarted })
+    // Only the sweep this test asks for runs, at the step it is asked for.
+    rig.host.collaboratorsForTests().lifetime.idleSweep.dispose()
+    await sweepTicks(2)
     const reader = collectSubscriber()
     await rig.host.subscribe({ id: 'reader', sessionId: SESSION, emit: reader.emit })
-    const sent = await rig.host.send(CALLER, restTestSend('queued one', fence()))
-    expect(sent.ok).toBe(true)
-    await vi.waitFor(() => expect(awaitStarted).toHaveBeenCalled())
-    rig.clock.now += IDLE_MS + 1
+    // Held, the send is accepted, the agent goes idle past the window, and the sweep runs, all
+    // ahead of the handover the send asks for.
+    const held = Promise.withResolvers<void>()
+    void rig.host['tasks'].serialize(SESSION, () => held.promise)
+    const sending = rig.host.send(CALLER, restTestSend('queued one', fence()))
+    void rig.host['tasks'].serialize(SESSION, async () => {
+      rig.clock.now += IDLE_MS + 1
+    })
+    const swept = sweepOnce(rig.host)
+    held.resolve()
+    expect((await sending).ok).toBe(true)
 
-    await sweepTicks()
+    await swept
     expect(rig.adapter.closeSession).not.toHaveBeenCalled()
-    started.resolve()
     await vi.waitFor(() => expect(rig.adapter.dispatch).toHaveBeenCalledTimes(2))
     const settled = (await rig.host.journalSnapshot(SESSION)).submissions.at(-1)
     expect(settled?.dispatchState).toBe('accepted')
@@ -130,7 +136,7 @@ describe('the idle sweep', () => {
     expect(rig.adapter.closeSession).not.toHaveBeenCalled()
     rig.sink.readChildWork.mockReturnValue([])
     rig.clock.now += IDLE_MS + 1
-    await vi.waitFor(() => expect(rig.adapter.closeSession).toHaveBeenCalledWith(SESSION, 'evict'))
+    await vi.waitFor(() => expect(rig.adapter.closeSession).toHaveBeenCalledWith(SESSION))
   })
 
   // A finished child reads done before the lead's wake-up turn writes its first row; stopping the
@@ -145,7 +151,7 @@ describe('the idle sweep', () => {
     await sweepTicks()
     expect(rig.adapter.closeSession).not.toHaveBeenCalled()
     rig.clock.now += IDLE_MS + 1
-    await vi.waitFor(() => expect(rig.adapter.closeSession).toHaveBeenCalledWith(SESSION, 'evict'))
+    await vi.waitFor(() => expect(rig.adapter.closeSession).toHaveBeenCalledWith(SESSION))
   })
 
   // Owed work is read every tick, not once a window: work that ends just before a window would
@@ -163,7 +169,7 @@ describe('the idle sweep', () => {
     await sweepTicks()
     expect(rig.adapter.closeSession).not.toHaveBeenCalled()
     rig.clock.now += IDLE_MS
-    await vi.waitFor(() => expect(rig.adapter.closeSession).toHaveBeenCalledWith(SESSION, 'evict'))
+    await vi.waitFor(() => expect(rig.adapter.closeSession).toHaveBeenCalledWith(SESSION))
   })
 
   it('stops an agent whose child records hold only children that went idle or finished', async () => {
@@ -174,7 +180,7 @@ describe('the idle sweep', () => {
     ])
     rig.clock.now += IDLE_MS + 1
 
-    await vi.waitFor(() => expect(rig.adapter.closeSession).toHaveBeenCalledWith(SESSION, 'evict'))
+    await vi.waitFor(() => expect(rig.adapter.closeSession).toHaveBeenCalledWith(SESSION))
   })
 
   it('never stops an agent while its lead turn runs, however quiet (P2-10)', async () => {
@@ -197,7 +203,7 @@ describe('the idle sweep', () => {
     await rig.host.subscribe({ id: 'on-screen', sessionId: SESSION, emit: reader.emit })
     rig.clock.now += IDLE_MS + 1
 
-    await vi.waitFor(() => expect(rig.adapter.closeSession).toHaveBeenCalledWith(SESSION, 'evict'))
+    await vi.waitFor(() => expect(rig.adapter.closeSession).toHaveBeenCalledWith(SESSION))
     expect(reader.events.some((event) => event.type === 'end')).toBe(false)
   })
 
@@ -216,7 +222,7 @@ describe('the idle sweep', () => {
     await sweepTicks()
     expect(rig.adapter.closeSession).not.toHaveBeenCalled()
     rig.clock.now += IDLE_MS
-    await vi.waitFor(() => expect(rig.adapter.closeSession).toHaveBeenCalledWith(SESSION, 'evict'))
+    await vi.waitFor(() => expect(rig.adapter.closeSession).toHaveBeenCalledWith(SESSION))
   })
 
   it('never stops a worker whose orchestration dispatch is open, and stops it once it settles (P2-19 i)', async () => {
@@ -232,7 +238,7 @@ describe('the idle sweep', () => {
     expect(hasOpenDispatch).toHaveBeenCalledWith(expect.objectContaining({ sessionId: SESSION }))
     open = false
     rig.clock.now += IDLE_MS + 1
-    await vi.waitFor(() => expect(rig.adapter.closeSession).toHaveBeenCalledWith(SESSION, 'evict'))
+    await vi.waitFor(() => expect(rig.adapter.closeSession).toHaveBeenCalledWith(SESSION))
   })
 
   // A Claude retrying a rate-limited request has taken the send but echoes nothing, so no turn row
@@ -249,7 +255,7 @@ describe('the idle sweep', () => {
     await sweepTicks()
     expect(rig.adapter.closeSession).not.toHaveBeenCalled()
     rig.clock.now += IDLE_MS + 1
-    await vi.waitFor(() => expect(rig.adapter.closeSession).toHaveBeenCalledWith(SESSION, 'evict'))
+    await vi.waitFor(() => expect(rig.adapter.closeSession).toHaveBeenCalledWith(SESSION))
   })
 
   it('keeps a child an unanswered prompt waits on (P2-22 i)', async () => {
@@ -320,8 +326,14 @@ describe('the idle sweep with no child running (P2-22 ii)', () => {
       stopAgent,
       stopStartingAgent: stopAgent,
       closeConversation,
-      onError: (_id, error) => {
-        throw error
+      // A failed step fails the test.
+      logger: {
+        warn: (_message, fields) => {
+          throw fields.error
+        },
+        error: (_message, fields) => {
+          throw fields.error
+        }
       }
     })
     await sweep.tick()

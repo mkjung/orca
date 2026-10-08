@@ -28,7 +28,11 @@ import {
   orcadBunRuntimeFilename,
   orcadNodeRuntimeRelativePath
 } from '../../shared/orcad-artifacts'
-import { removeTreeSync } from '../../shared/windows-transient-lock-removal'
+import {
+  killAndAwaitExit,
+  killProfileDaemons,
+  removeTestRoot
+} from './orcad-daemon-teardown-fixture'
 import { PROTOCOL_VERSION } from '../daemon/types'
 import type { ServeReadiness } from '../server/serve-readiness'
 import {
@@ -91,6 +95,7 @@ const missing = [
 let root = ''
 let client = ''
 let backupDriver = ''
+let bunProtocolVersion = 0
 const launched = new Set<number>()
 
 /** Without Vitest's markers: daemon-entry.js does not start its server under VITEST. */
@@ -174,7 +179,8 @@ async function launch(slot: Slot, userDataDir: string): Promise<ServeReadiness> 
           fullVersion: slot.version,
           userDataDir,
           bindHost: '127.0.0.1',
-          port: 0
+          port: 0,
+          activationRoot: join(userDataDir, '.orcad-activation-transaction')
         })
       )
     ).trim()
@@ -254,6 +260,29 @@ async function backUpProfile(slot: Slot, runtime: string, userDataDir: string): 
   expect(JSON.parse(result.stdout.trim().split('\n').at(-1) ?? '')).toEqual({ ok: true })
 }
 
+async function killLaunched(): Promise<void> {
+  const pids = [...launched]
+  launched.clear()
+  await killAndAwaitExit(pids)
+}
+
+/** The protocol the Bun slot's own daemon reports, read from a throwaway launch. */
+async function probeBunDaemonProtocol(): Promise<number> {
+  const probeRoot = mkdtempSync(join(root, 'bun-probe-'))
+  const slot = installSlot(probeRoot, 'Bun', bunSlotSource!)
+  const userDataDir = join(probeRoot, 'data')
+  try {
+    const daemon = (await launch(slot, userDataDir)).health!.terminalDaemon
+    expect(daemon).toMatchObject({ state: 'live', protocolVersion: expect.any(Number) })
+    return daemon.protocolVersion!
+  } finally {
+    await stop(slot).catch(() => {})
+    await killLaunched()
+    // Even after a failed launch: the daemon outlives orcad, and only its pid file names it.
+    await killProfileDaemons(userDataDir)
+  }
+}
+
 // Windows has no orcad launch path (POSIX-only, orcad-remote-host-support.ts), so no inputs.
 const skip = skipForMissingInputs('cross-runtime', posix ? missing : [])
 
@@ -321,27 +350,28 @@ worker.on('error', (error) => { console.error(error); process.exitCode = 1 })
       outfile: client,
       logLevel: 'silent'
     })
+    bunProtocolVersion = await probeBunDaemonProtocol()
+  }, 180_000)
+
+  afterEach(killLaunched)
+
+  afterAll(async () => {
+    await removeTestRoot(root)
   })
 
-  afterEach(() => {
-    for (const pid of launched) {
-      try {
-        process.kill(pid, 'SIGKILL')
-      } catch {}
-    }
-    launched.clear()
-  })
-
-  afterAll(() => {
-    removeTreeSync(root)
-  })
-
-  it.each([
+  it.for([
     ['Bun', 'Node'],
     ['Node', 'Bun']
   ] as const)(
     '%s orcad hands its daemon and profile to the %s orcad',
-    async (from: Runtime, to: Runtime) => {
+    { timeout: 240_000 },
+    async ([from, to], context) => {
+      // A daemon at another protocol is never adopted across an update, so there is no hand-over.
+      if (bunProtocolVersion !== PROTOCOL_VERSION) {
+        context.skip(
+          `the Bun orcad's daemon speaks protocol ${bunProtocolVersion}, this checkout ${PROTOCOL_VERSION}`
+        )
+      }
       const caseRoot = mkdtempSync(join(root, `${from}-${to}-`))
       const userDataDir = join(caseRoot, 'data')
       const { slots, nodeRuntime } = installSlots(caseRoot)
@@ -422,11 +452,10 @@ worker.on('error', (error) => { console.error(error); process.exitCode = 1 })
         await daemonClient('kill', userDataDir, sessionId, '')
         await vi.waitFor(() => expect(isAlive(created.pid)).toBe(false), { timeout: 10_000 })
       } finally {
-        if (daemonPid && isAlive(daemonPid)) {
-          process.kill(daemonPid, 'SIGKILL')
+        if (daemonPid) {
+          await killAndAwaitExit([daemonPid])
         }
       }
-    },
-    240_000
+    }
   )
 })

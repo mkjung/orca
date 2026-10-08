@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream, existsSync } from 'node:fs'
-import { chmod, copyFile, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, mkdir, readFile, rename, rm, utimes, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { z } from 'zod'
 import { getAppEnvironment } from '../../shared/app-environment'
@@ -16,13 +16,14 @@ import {
   orcadTemplateCommonFilenames,
   orcadTemplateTargetFilenames
 } from '../../shared/orcad-artifacts'
-import { NODE_RUNTIME_ASSETS, type ServerTarget } from '../../shared/node-runtime-pin'
+import { pinnedNodeRuntimeAsset, type NodeRuntimeTarget } from '../../shared/node-runtime-pin'
 import { findOrcadCachePath } from './orcad-cache-path'
 import {
   fileSha256,
   verifyFileSha256,
   type PinnedRuntimeMaterializeOptions
 } from './pinned-runtime-materializer'
+import { OrcadArtifactsUnavailableError, OrcadHostUnsupportedError } from './orcad-host-unavailable'
 
 const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u)
 const TemplateTargetSchema = z
@@ -49,10 +50,16 @@ type MaterializeOptions = PinnedRuntimeMaterializeOptions & {
 }
 
 const materializations = new Map<string, Promise<string>>()
+// Slots handed out this session: a deploy may still be reading one, so cache retention keeps them.
+const materializedVersions = new Set<string>()
+
+export function materializedOrcadArtifactVersions(): ReadonlySet<string> {
+  return materializedVersions
+}
 
 /** A verified slot directory for `target`; its runtime is referenced, not included (design D2). */
 export async function materializeOrcadArtifact(
-  target: ServerTarget,
+  target: NodeRuntimeTarget,
   options: MaterializeOptions = {}
 ): Promise<string> {
   options.signal?.throwIfAborted()
@@ -75,7 +82,7 @@ export async function materializeOrcadArtifact(
 export async function assembleOrcadArtifact(args: {
   templateDir: string
   cacheRoot: string
-  target: ServerTarget
+  target: NodeRuntimeTarget
   manifest?: z.infer<typeof TemplateManifestSchema>
 }): Promise<string> {
   const manifest = args.manifest ?? (await readTemplateManifest(args.templateDir))
@@ -88,7 +95,11 @@ export async function assembleOrcadArtifact(args: {
     (path) => isCompleteArtifact(path, fullVersion, sources, sourceHashes)
   )
   const targetDir = cached.path
+  materializedVersions.add(fullVersion)
   if (cached.verified) {
+    // Retention evicts by recency, so a reused slot counts as recently used.
+    const now = new Date()
+    await utimes(targetDir, now, now).catch(() => undefined)
     return targetDir
   }
   await mkdir(targetRoot, { recursive: true })
@@ -127,13 +138,13 @@ function isExecutableArtifact(filename: string): boolean {
 
 function artifactSources(
   templateDir: string,
-  target: ServerTarget,
+  target: NodeRuntimeTarget,
   manifest: z.infer<typeof TemplateManifestSchema>
 ): { filename: string; path: string; executable?: boolean }[] {
   const targetDir = join(templateDir, ORCAD_TEMPLATE_TARGETS_DIR, target)
   const targetManifest = manifest.targets[target]
   if (!targetManifest) {
-    throw new Error(`Packaged orcad template does not support ${target}`)
+    throw new OrcadHostUnsupportedError(`Packaged orcad template does not support ${target}`)
   }
   const targetFiles = new Set(orcadTemplateTargetFilenames(target))
   const required = orcadArtifactFilenames(target).map((filename) => ({
@@ -204,12 +215,12 @@ async function readTemplateManifest(
 
 async function verifyTemplate(
   templateDir: string,
-  target: ServerTarget,
+  target: NodeRuntimeTarget,
   manifest: z.infer<typeof TemplateManifestSchema>
 ): Promise<void> {
   const targetManifest = manifest.targets[target]
   if (!targetManifest) {
-    throw new Error(`Packaged orcad template does not support ${target}`)
+    throw new OrcadHostUnsupportedError(`Packaged orcad template does not support ${target}`)
   }
   for (const filename of orcadTemplateCommonFilenames()) {
     const expected = manifest.commonSha256[filename]
@@ -234,7 +245,7 @@ async function verifyTemplate(
     join(targetDir, ORCAD_NODE_RUNTIME_MARKER_FILENAME),
     'utf8'
   )
-  if (runtimeReference.trim() !== NODE_RUNTIME_ASSETS[target].executableSha256) {
+  if (runtimeReference.trim() !== pinnedNodeRuntimeAsset(target).executableSha256) {
     throw new Error(`Packaged orcad template ${target} does not reference the pinned Node`)
   }
   if (targetManifest.browserName && targetManifest.browserSha256) {
@@ -262,10 +273,15 @@ export function getOrcadTemplateCandidates(): string[] {
   return [...new Set(candidates)]
 }
 
+/** Whether this build carries an orcad template at all; dev builds usually don't. */
+export function hasOrcadTemplate(): boolean {
+  return getOrcadTemplateCandidates().some((candidate) => existsSync(candidate))
+}
+
 function resolveOrcadTemplateDir(): string {
   const found = getOrcadTemplateCandidates().find((candidate) => existsSync(candidate))
   if (!found) {
-    throw new Error('The packaged orcad deployment template is missing')
+    throw new OrcadArtifactsUnavailableError('The packaged orcad deployment template is missing')
   }
   return found
 }

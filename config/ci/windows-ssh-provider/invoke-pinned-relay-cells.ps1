@@ -6,12 +6,17 @@ param(
  [Parameter(Mandatory=$true)][hashtable]$Context,
  [Parameter(Mandatory=$true)][ValidateSet('win32-arm64','win32-x64')][string]$Target,
  [Parameter(Mandatory=$true)][string]$ReceiptRoot,
- [ValidateSet('pinned-cmd','pinned-powershell','legacy-opt-out')][string[]]$Cells=@('pinned-cmd','pinned-powershell','legacy-opt-out')
+ [ValidateSet('pinned-cmd','pinned-powershell','legacy-opt-out','orcad-cmd','orcad-powershell','orcad-convert','orcad-cli-managed','orcad-cli-convert','orcad-cli-relay-kept')][string[]]$Cells=@('pinned-cmd','pinned-powershell','legacy-opt-out','orcad-cmd','orcad-powershell')
 )
 $ErrorActionPreference='Stop'
 if($env:GITHUB_ACTIONS -ne 'true' -or $env:ORCA_ISOLATED_SSH_CI -ne '1'){throw 'Disposable CI only'}
-$shells=@{'pinned-cmd'='cmd';'pinned-powershell'='powershell';'legacy-opt-out'='cmd'}
+$shells=@{'pinned-cmd'='cmd';'pinned-powershell'='powershell';'legacy-opt-out'='cmd';'orcad-cmd'='cmd';'orcad-powershell'='powershell';'orcad-convert'='cmd';'orcad-cli-managed'='cmd';'orcad-cli-convert'='cmd';'orcad-cli-relay-kept'='cmd'}
+# App-level cells drive the e2e build (and the bundled CLI) against the host; each greps one tagged test.
+$appCells=@{'orcad-convert'=@('tests/e2e/ssh-orcad-auto-convert.spec.ts','');'orcad-cli-managed'=@('tests/e2e/ssh-orcad-windows-cli-matrix.spec.ts','@orcad-cli-managed');'orcad-cli-convert'=@('tests/e2e/ssh-orcad-windows-cli-matrix.spec.ts','@orcad-cli-convert');'orcad-cli-relay-kept'=@('tests/e2e/ssh-orcad-windows-cli-matrix.spec.ts','@orcad-cli-relay-kept')}
+$electronBuilt=$false
 if($Context.accounts.Count -lt $Cells.Count){throw 'Each cell needs its own private account'}
+$seenApp=$false
+foreach($id in $Cells){if($appCells.ContainsKey($id)){$seenApp=$true}elseif($seenApp){throw 'App cells must run last: they switch native modules to Electron'}}
 if(-not $Context.forbiddenToolLog){throw 'Run the provisioning with -HiddenTools so toolchain calls are logged'}
 $openSshKey='HKLM:\SOFTWARE\OpenSSH'
 $windowsPowerShell=Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
@@ -21,7 +26,6 @@ $priorKnown=if($knownExisted){[IO.File]::ReadAllBytes($knownPath)}else{$null}
 $priorBackground=$env:ORCA_BACKGROUND_LAUNCH
 $failed=[Collections.Generic.List[string]]::new()
 $summary=[Collections.Generic.List[hashtable]]::new()
-$wmiOriginalSd=$null
 
 function Invoke-PrivateSsh([string]$Account,[string]$Command) {
   $start=[Diagnostics.ProcessStartInfo]::new($Context.sshExe)
@@ -44,23 +48,45 @@ function Set-PrivateDefaultShell([string]$Shell) {
   }
 }
 
-# The relay launch goes through WMI Win32_Process.Create, which WMI refuses to a standard user's SSH
-# (network) logon without Remote Enable on root\cimv2. Prints ORCA_WMI=<ReturnValue> or ORCA_WMI=denied.
+# Diagnostic only: Orca must launch the relay without WMI, which refuses a standard user's SSH
+# (network) logon unless an administrator grants Remote Enable on root\cimv2. The cells run with no
+# such grant, so a relay launch that still needs WMI fails its cell. Prints ORCA_WMI=<ReturnValue>
+# or ORCA_WMI=denied.
 function Test-PrivateWmiLaunch([string]$Account) {
   $out=Invoke-PrivateSsh $Account 'powershell.exe -NoProfile -NonInteractive -Command "try{$r=Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine=''cmd.exe /d /c exit 0''} -ErrorAction Stop;''ORCA_WMI=''+$r.ReturnValue}catch{''ORCA_WMI=denied''}"'
   $match=[regex]::Match($out,'ORCA_WMI=(\S+)')
   if($match.Success){return $match.Groups[1].Value}else{return 'no-output'}
 }
 
-function Grant-CellWmiLaunch([string[]]$Sids) {
-  $sd=(Invoke-CimMethod -Namespace root/cimv2 -ClassName __SystemSecurity -MethodName GetSD).SD
-  $script:wmiOriginalSd=[byte[]]$sd
-  $raw=[Security.AccessControl.RawSecurityDescriptor]::new([byte[]]$sd,0)
-  # WBEM_ENABLE | WBEM_METHOD_EXECUTE | WBEM_REMOTE_ACCESS
-  foreach($sid in $Sids){$raw.DiscretionaryAcl.InsertAce(0,[Security.AccessControl.CommonAce]::new([Security.AccessControl.AceFlags]::None,[Security.AccessControl.AceQualifier]::AccessAllowed,0x23,[Security.Principal.SecurityIdentifier]::new($sid),$false,$null))}
-  $bytes=[byte[]]::new($raw.BinaryLength);$raw.GetBinaryForm($bytes,0)
-  $result=Invoke-CimMethod -Namespace root/cimv2 -ClassName __SystemSecurity -MethodName SetSD -Arguments @{SD=$bytes}
-  if($result.ReturnValue -ne 0){throw "WMI namespace grant failed with $($result.ReturnValue)"}
+# App-level cells (tests/e2e/ssh-orcad-auto-convert.spec.ts, ssh-orcad-windows-cli-matrix.spec.ts). Last
+# in the run: they switch native modules to Electron's ABI, which the vitest cells cannot load.
+function Invoke-AppCell($Account,[string]$Descriptor,[string]$Log,[string]$Spec,[string]$Grep) {
+  $ready=Invoke-PrivateSsh $Account.name 'git init -q orca-convert-repo && git -C orca-convert-repo -c user.name=orca -c user.email=orca@example.invalid commit -q --allow-empty -m init && echo ORCA_REPO_READY'
+  if($ready -notmatch 'ORCA_REPO_READY'){throw 'Could not create the convert cell repository as the account'}
+  # Out of the app's default lookup, so the relay phase runs without a template.
+  $template=Join-Path $env:RUNNER_TEMP 'orcad-convert-template'
+  # Why guarded: Copy-Item into an existing folder nests the copy instead of replacing it.
+  if(-not (Test-Path -LiteralPath $template)){Copy-Item -LiteralPath 'out\orcad-template' -Destination $template -Recurse -Force}
+  Rename-Item -LiteralPath 'out\orcad-template' -NewName 'orcad-template.convert-hidden'
+  try {
+    if(-not $script:electronBuilt){
+      & node config/scripts/ensure-native-runtime.mjs --runtime=electron 2>&1 | Tee-Object -FilePath $Log | Out-Host
+      if($global:LASTEXITCODE -ne 0){Write-Host 'Switching native modules to Electron failed';return $global:LASTEXITCODE}
+      & pnpm exec electron-vite build --mode e2e 2>&1 | Tee-Object -FilePath $Log -Append | Out-Host
+      if($global:LASTEXITCODE -ne 0){Write-Host 'The e2e app build failed';return $global:LASTEXITCODE}
+      $script:electronBuilt=$true
+    }
+    $env:ORCA_E2E_ORCAD_CONVERT_HOST=$Descriptor;$env:ORCA_E2E_ORCAD_CONVERT_TEMPLATE=$template;$env:SKIP_BUILD='1'
+    $grepArgs=if($Grep){@('--grep',$Grep)}else{@()}
+    & pnpm exec playwright test --config tests/playwright.config.ts $Spec @grepArgs --project=electron-headless --workers=1 2>&1 | Tee-Object -FilePath $Log -Append | Out-Host
+    # Functions return uncaptured output, so only the exit code may reach the caller.
+    return $global:LASTEXITCODE
+  } finally {
+    # Screenshots, traces and error context: Playwright clears test-results on the next cell's run.
+    if(Test-Path -LiteralPath 'test-results'){Copy-Item -LiteralPath 'test-results' -Destination ($Log -replace '\.log$','.test-results') -Recurse -Force}
+    Remove-Item Env:ORCA_E2E_ORCAD_CONVERT_HOST,Env:ORCA_E2E_ORCAD_CONVERT_TEMPLATE,Env:SKIP_BUILD -ErrorAction SilentlyContinue
+    Rename-Item -LiteralPath 'out\orcad-template.convert-hidden' -NewName 'orcad-template'
+  }
 }
 
 New-Item -ItemType Directory -Force -Path $ReceiptRoot | Out-Null
@@ -73,15 +99,9 @@ try {
   Add-Content -LiteralPath $knownPath -Value ("`n"+[IO.File]::ReadAllText($Context.knownHosts))
   $env:ORCA_BACKGROUND_LAUNCH='1'
   # DefaultShell is still stock cmd here.
-  $wmi=@{beforeGrant=(Test-PrivateWmiLaunch $Context.accounts[0].name);granted=$false}
-  if($wmi.beforeGrant -ne '0'){
-    Write-Host "::warning::Standard SSH user cannot launch through WMI Win32_Process.Create ($($wmi.beforeGrant)); Orca's Windows relay launch needs it. Granting the cell accounts Remote Enable on root\cimv2 so the remaining assertions run."
-    Grant-CellWmiLaunch @($Context.accounts[0..($Cells.Count-1)] | ForEach-Object {(Get-LocalUser -Name $_.name).SID.Value})
-    $wmi.granted=$true
-    $wmi.afterGrant=Test-PrivateWmiLaunch $Context.accounts[0].name
-    if($wmi.afterGrant -ne '0'){throw "WMI launch still refused after the grant ($($wmi.afterGrant))"}
-  }
-  $summary.Add(@{standardUserWmiLaunch=$wmi})
+  $wmi=Test-PrivateWmiLaunch $Context.accounts[0].name
+  Write-Host "Standard SSH user WMI Win32_Process.Create: $wmi (no grant; the relay launch must not depend on it)"
+  $summary.Add(@{standardUserWmiLaunch=$wmi;granted=$false})
   for($index=0;$index -lt $Cells.Count;$index++){
     $cell=$Cells[$index];$account=$Context.accounts[$index];$shell=$shells[$cell]
     Set-PrivateDefaultShell $shell
@@ -94,11 +114,18 @@ try {
     @{cell=$cell;target=$Target;host='127.0.0.1';port=[int]$Context.port;username=$account.name;identityFile=$Context.identityFile;home=$account.home;forbiddenToolLog=$Context.forbiddenToolLog;receipt=(Join-Path $ReceiptRoot "$cell.json")} | ConvertTo-Json | Set-Content -LiteralPath $descriptor -Encoding utf8NoBOM
     $env:ORCA_RUN_SSH_WINDOWS_HOST='1';$env:ORCA_SSH_WINDOWS_HOST_CELL=$descriptor
     Write-Host "Windows host cell $cell ($Target, DefaultShell $shell, account $($account.name))"
-    & node node_modules/vitest/vitest.mjs run --config config/vitest.config.ts src/main/ssh/ssh-relay-windows-host-lane.test.ts --reporter=verbose 2>&1 | Tee-Object -FilePath (Join-Path $ReceiptRoot "$cell.log")
-    # Why global: under the workflow's GetNewClosure callback, bare $LASTEXITCODE reads a stale captured copy.
-    $code=$global:LASTEXITCODE
+    if($appCells.ContainsKey($cell)){
+      $code=Invoke-AppCell $account $descriptor (Join-Path $ReceiptRoot "$cell.log") $appCells[$cell][0] $appCells[$cell][1]
+    } else {
+      # orcad cells deploy managed orcad instead of the relay; same account and descriptor shape.
+      $lane=if($cell.StartsWith('orcad-')){'src/main/ssh/orcad-windows-host-lane.test.ts'}else{'src/main/ssh/ssh-relay-windows-host-lane.test.ts'}
+      & node node_modules/vitest/vitest.mjs run --config config/vitest.config.ts $lane --reporter=verbose 2>&1 | Tee-Object -FilePath (Join-Path $ReceiptRoot "$cell.log")
+      # Why global: under the workflow's GetNewClosure callback, bare $LASTEXITCODE reads a stale captured copy.
+      $code=$global:LASTEXITCODE
+    }
     # The relay's own log is the only record of why it closed a client.
-    foreach($log in @(Get-ChildItem -Path (Join-Path $account.home '.orca-remote\relay-*\relay*.log') -File -ErrorAction SilentlyContinue)){Copy-Item -LiteralPath $log.FullName -Destination (Join-Path $ReceiptRoot "$cell.$($log.Directory.Name).$($log.Name)")}
+    # orcad.log holds only the last launch on Windows; orcad.log.1 is the one before a restart.
+    foreach($log in @(Get-ChildItem -Path (Join-Path $account.home '.orca-remote\relay-*\relay*.log'),(Join-Path $account.home '.orca-remote\orcad-*\orcad.log'),(Join-Path $account.home '.orca-remote\orcad-*\orcad.log.1') -File -ErrorAction SilentlyContinue)){Copy-Item -LiteralPath $log.FullName -Destination (Join-Path $ReceiptRoot "$cell.$($log.Directory.Name).$($log.Name)")}
     if(Test-Path -LiteralPath $Context.forbiddenToolLog){Copy-Item -LiteralPath $Context.forbiddenToolLog -Destination (Join-Path $ReceiptRoot "$cell.forbidden-tool-calls.log")}
     $summary.Add(@{cell=$cell;shell=$shell;account=$account.name;exitCode=$code})
     if($code -ne 0){$failed.Add($cell)}
@@ -112,7 +139,6 @@ try {
   } while([DateTime]::UtcNow -lt $graceDeadline)
   $summary.Add(@{relayProcessesAfterGrace=@($relays | ForEach-Object {[IO.Path]::GetFileName($_.ExecutablePath)})})
 } finally {
-  if($wmiOriginalSd){$null=Invoke-CimMethod -Namespace root/cimv2 -ClassName __SystemSecurity -MethodName SetSD -Arguments @{SD=$wmiOriginalSd}}
   Set-PrivateDefaultShell 'cmd'
   if($knownExisted){[IO.File]::WriteAllBytes($knownPath,$priorKnown)}else{Remove-Item -LiteralPath $knownPath -Force -ErrorAction SilentlyContinue}
   $env:ORCA_BACKGROUND_LAUNCH=$priorBackground

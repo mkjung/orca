@@ -15,6 +15,7 @@ import { backgroundWakeCapture } from './claude-captured-fold-steer-frames.test-
 import { MOVED_TO_BACKGROUND } from './claude-captured-task-frames.test-fixture'
 import { hostWithParent, parent, producer } from './claude-child-work-producer-harness.test-fixture'
 import { PROVIDER_SESSION_ID } from './claude-structured-session-test-support'
+import { createStructuredAgentSessionLogger } from '../native-chat/agent-session-wire/structured-agent-session-logger'
 
 vi.mock('../telemetry/client', () => ({ track: vi.fn() }))
 vi.mock('../telemetry/cohort-classifier', () => ({ getCohortAtEmit: vi.fn(() => ({})) }))
@@ -30,21 +31,29 @@ async function wiredSession() {
   let sequence = 0
   const journal = {
     cursor: () => ({ epoch: 'epoch-1', sequence: ++sequence }),
-    isReadOnly: false,
     lastActivityAt: () => 1,
+    submissions: (): ReturnType<Journal['submissions']> =>
+      submissions.map((submission) => ({ ...submission })),
+    item: (itemId: string): ReturnType<Journal['item']> => {
+      const item = run.journalItems.get(itemId)
+      return item ? { ...item, revision: 1, observedAt: run.now() } : null
+    },
+    // No Stop was ever pressed here.
+    stopMarks: { latest: () => null, revision: () => 0 },
     snapshot: () => ({
       items: [...run.journalItems.values()]
         .sort((a, b) => a.sequence - b.sequence)
-        .map((item) => ({ ...item, revision: 1 })),
+        .map((item) => ({ ...item, revision: 1, observedAt: run.now() })),
       submissions: submissions.map((submission) => ({ ...submission }))
     })
   }
   const feed = new StructuredAgentSessionStatusFeed({
+    logger: createStructuredAgentSessionLogger(),
     sessions: new Map([
       [
         parent.sessionId,
         {
-          // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: the feed reads only the cursor, read-only flag, activity clock and snapshot served here.
+          // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: the fixture supplies the feed's cursor, clock, Stop marks, snapshot, submissions and item reads.
           journal: journal as unknown as Journal,
           params: {
             location: {

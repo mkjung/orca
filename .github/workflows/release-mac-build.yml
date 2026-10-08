@@ -13,6 +13,11 @@ on:
         description: release-cut workflow run that requested this build
         required: true
         type: string
+      javascript_source_sha:
+        description: Commit of the shared JavaScript artifact; empty keeps the legacy build
+        required: false
+        default: ''
+        type: string
 
 permissions:
   # actions: read downloads the orcad template the parent release-cut run built.
@@ -31,6 +36,10 @@ jobs:
     # faster runner.
     runs-on: blacksmith-6vcpu-macos-15
     timeout-minutes: 60
+    # actions: read fetches the relay addons from the release-cut run.
+    permissions:
+      actions: read
+      contents: write
     env:
       NODE_OPTIONS: --max-old-space-size=4096
     steps:
@@ -129,18 +138,49 @@ jobs:
           echo "identity=$identity" >>"$GITHUB_OUTPUT"
           echo "Classified $TAG as $identity"
 
+      # Only a Windows runner compiles these; release-cut's relay-windows-process-tree
+      # job built them from this tag before dispatching this workflow.
+      - name: Collect the Windows process-table addons for the relay
+        uses: actions/download-artifact@v8
+        with:
+          name: relay-windows-process-tree
+          path: .build/windows-process-tree
+          run-id: ${{ inputs.release_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Download release JavaScript from the release run
+        if: inputs.javascript_source_sha != ''
+        uses: actions/download-artifact@v8
+        with:
+          name: release-javascript
+          path: .build/release-javascript
+          run-id: ${{ inputs.release_run_id }}
+          github-token: ${{ github.token }}
+
       - name: Build app
-        run: pnpm build:release
+        run: |
+          if [ -n "$ORCA_RELEASE_JAVASCRIPT_SOURCE_SHA" ]; then
+            node config/scripts/release-javascript-artifact.mjs restore
+            pnpm run build:release:host
+          else
+            pnpm run build:release
+          fi
         env:
           # Why: Vite's web build crossed Node's default old-space ceiling on
           # the macOS release runner, leaving v1.4.2-rc.8 as an incomplete draft.
           NODE_OPTIONS: --max-old-space-size=4096
           ORCA_BUILD_IDENTITY: ${{ steps.tag-classify.outputs.identity }}
+          ORCA_RELEASE_JAVASCRIPT_SOURCE_SHA: ${{ inputs.javascript_source_sha }}
           ORCA_DIAGNOSTICS_TOKEN_URL: https://www.onorca.dev/diagnostics/token
           ORCA_POSTHOG_WRITE_KEY: ${{ secrets.ORCA_POSTHOG_WRITE_KEY }}
+          # Fail the release rather than ship a relay that cannot launch outside
+          # sshd's job for a standard user on a Windows SSH host.
+          ORCA_REQUIRE_RELAY_NATIVE_ADDONS: x64,arm64
 
       # Design D2: the parent release-cut run merged it from every node-server lane at this tag.
       - name: Download the orcad deployment template from the release run
+        # Why: release-cut skips the template for a tag that predates it.
+        if: hashFiles('config/scripts/packaged-orcad-template.cjs') != ''
         uses: actions/download-artifact@v8
         with:
           name: orcad-template

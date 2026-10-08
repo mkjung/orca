@@ -1,3 +1,4 @@
+import type { StructuredAgentSessionLogger } from '../native-chat/agent-session-wire/structured-agent-session-logger'
 import type { AgentJournalDispatchRejection } from '../../shared/agent-session-failure-words'
 import type { SubmissionRejectionFact } from '../../shared/agent-session-failure'
 import type {
@@ -6,8 +7,8 @@ import type {
 } from '../../shared/agent-session-journal-types'
 import type { StructuredAgentSessionEventSink } from '../native-chat/agent-session-wire/structured-agent-session-event-sink'
 import type {
-  StructuredAgentSessionStartedEvent,
-  StructuredAgentSessionStopCause
+  StructuredAgentSessionOptionsSkippedEvent,
+  StructuredAgentSessionStartedEvent
 } from '../native-chat/agent-session-wire/structured-agent-session-adapter'
 import type {
   ClaudeStreamJsonConnection,
@@ -50,6 +51,8 @@ export type ClaudeStructuredSessionEvent =
       /** Submission instant of the dispatch this replay acknowledged; the origin
        *  of the turn it opens. Absent when the host cannot name a send. */
       requestedAt?: number
+      /** The submission this replay acknowledged, which opens the turn. */
+      clientMessageId?: string
       /** Host clock at receipt; stamped on turn boundaries only. */
       observedAt?: number
     }
@@ -65,8 +68,9 @@ export type ClaudeStructuredSessionEvent =
       fence: number
     }
   | { type: 'auth-diagnostic'; sessionId: string; diagnostic: ClaudeAuthDiagnostic }
-  /** Startup facts applied and saved options restored; held prompts are about to be written. */
+  /** Startup facts applied; the child already took any message written to it. */
   | StructuredAgentSessionStartedEvent
+  | StructuredAgentSessionOptionsSkippedEvent
   | {
       type: 'ended'
       sessionId: string
@@ -74,14 +78,14 @@ export type ClaudeStructuredSessionEvent =
       failure?: SubmissionRejectionFact
       /** Present for first-hand child exits so the host can fence recovery. */
       cause?: 'unexpected-exit' | 'requested-close'
-      /** Who asked for a close; the translator settles the open turn with it. */
-      stopCause?: StructuredAgentSessionStopCause
       fence?: number
       acquisitionGeneration?: string
       /** Host clock when the end was observed. */
       observedAt?: number
       /** The child ended before proving startup, so reacquiring would repeat the same start. */
       startupUnproven?: true
+      /** The child ended before it answered initialize, so it ran nothing it was handed. */
+      startupUnanswered?: true
     }
 
 export type ClaudeLateDispatchOutcome =
@@ -118,6 +122,8 @@ export type ClaudeStructuredSessionAdapterDeps = {
     leafUuid: string | null
     fence: number
   }) => Promise<void>
+  /** Where bookkeeping a close or exit does after the child is gone reports a failure. */
+  logger?: StructuredAgentSessionLogger
   /** Advance the durable resume point in place at a turn end; bookkeeping, never a turn failure. */
   persistResumePoint?: (input: {
     sessionId: string
@@ -179,6 +185,10 @@ export type ClaudeSession = {
   /** Options whose recorded value the provider reported, not merely accepted. */
   confirmedOptions: Set<string>
   restoreSkippedOptions: Set<string>
+  /** The model the child was launched with, as `--model`; null when it runs the CLI's own. */
+  launchedModel: string | null
+  /** The launch left the saved Fast out, so the start applies it once the settings are read. */
+  fastModeAtStart: boolean
   /** Absent when the adapter runs without a host catalog store (tests). */
   catalogAccess?: AgentModelCatalogSessionAccess
   /** CLI-advertised protocol capabilities from init; gates interrupt-receipt handling. */
@@ -206,7 +216,7 @@ export type ClaudeSession = {
   translator: ClaudeJournalTranslator | null
   events: StructuredAgentSessionEventSink | undefined
   unbindReadingControl?: () => void
-  /** Published at spawn; init facts, option restore and queued prompts land when startup does. */
+  /** Published at spawn with its saved options; init facts land when startup does. */
   startup: ClaudeSessionStartup
 }
 
@@ -348,5 +358,7 @@ export type ClaudeAcquireCallbacks = {
     event: ClaudeStructuredSessionEvent
   ) => void
   handleExit: (sessionId: string, attempt: ClaudeAcquisitionAttempt, error: Error) => void
+  /** The root exited during a close Orca began: finishes that close for this exact child. */
+  finishClose: (sessionId: string, attempt: ClaudeAcquisitionAttempt) => void
   settleExit: (sessionId: string, exit: ClaudeSessionExit) => Promise<void>
 }

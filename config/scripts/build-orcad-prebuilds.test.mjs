@@ -76,7 +76,7 @@ describe('assertNodePtyPatchApplied', () => {
     ).toThrow(/cfsetispeed pin \(glibc 2\.42\)[\s\S]*cfsetospeed pin \(glibc 2\.42\)/)
   })
 
-  it('names the patch and the doc so the fix is findable', () => {
+  it('names the patch so the fix is findable', () => {
     expect(() => assertNodePtyPatchApplied(stage("'ldflags': []", '// upstream'))).toThrow(
       /config\/patches\/node-pty@1\.1\.0\.patch/
     )
@@ -210,10 +210,13 @@ describe('prebuild floor gate', () => {
       new URL('../../src/shared/node-runtime-pin.ts', import.meta.url),
       join(root, 'src', 'shared', 'node-runtime-pin.ts')
     )
-    copyFileSync(
-      new URL('./orcad-prebuild-slot-contents.mjs', import.meta.url),
-      join(scripts, 'orcad-prebuild-slot-contents.mjs')
-    )
+    for (const script of [
+      'orcad-prebuild-slot-contents.mjs',
+      'orcad-prebuild-compat-addons.mjs',
+      'orcad-prebuild-node-gyp.mjs'
+    ]) {
+      copyFileSync(new URL(`./${script}`, import.meta.url), join(scripts, script))
+    }
     const apiDir = join(root, 'node_modules', 'node-addon-api')
     mkdirSync(apiDir, { recursive: true })
     writeFileSync(join(apiDir, 'package.json'), JSON.stringify({ name: 'node-addon-api' }))

@@ -3,7 +3,10 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { AgentSessionJournalIdentity } from '../../../shared/agent-session-journal-types'
+import type {
+  AgentJournalApprovalSubject,
+  AgentSessionJournalIdentity
+} from '../../../shared/agent-session-journal-types'
 import { createTrackedJournalOpener } from '../agent-session-journal/journal-host-database-test-support'
 import type { AgentSessionJournal } from '../agent-session-journal/journal-store'
 import {
@@ -11,15 +14,18 @@ import {
   type StructuredAgentSessionAdapter
 } from './structured-agent-session-adapter'
 import { performCancel, type AgentSessionTurnContext } from './structured-agent-session-turns'
+import { createStructuredAgentSessionLogger } from './structured-agent-session-logger'
 import { cancelStructuredAgentSessionPrompt } from './structured-agent-session-prompt-cancel'
 import type { AgentSessionPromptCancelRoute } from './structured-agent-session-adapter-stop'
+import { codexProviderHandle } from '../../../shared/agent-session-provider-handle-encoding'
+import { NO_STRUCTURED_AGENTS } from './structured-agent-session-adapter-router-test-support'
 
 const IDENTITY: AgentSessionJournalIdentity = {
   sessionId: 'session-1',
   workspaceId: 'workspace-1',
   hostId: 'host-1',
   agent: 'codex',
-  providerHandle: { kind: 'codex', threadId: 'thread-1' }
+  providerHandle: codexProviderHandle('thread-1')
 }
 const PROMPT_IDENTITY = {
   provider: 'codex' as const,
@@ -42,7 +48,8 @@ afterEach(async () => {
 async function pendingPrompt(
   options = [{ id: 'allow', label: 'Allow' }],
   /** Raise the card in a turn that is still running, rather than on the conversation. */
-  inLiveTurn = false
+  inLiveTurn = false,
+  subject?: AgentJournalApprovalSubject
 ): Promise<{ journal: AgentSessionJournal; itemId: string }> {
   root = await mkdtemp(join(tmpdir(), 'orca-prompt-cancel-'))
   const journal = await journals.open({ identity: IDENTITY, stateDirectory: root })
@@ -59,6 +66,7 @@ async function pendingPrompt(
       kind: 'approval',
       title: 'Approve?',
       detail: null,
+      ...(subject ? { subject } : {}),
       options,
       resolution: {
         state: 'pending',
@@ -77,18 +85,19 @@ async function pendingPrompt(
 
 function context(
   journal: AgentSessionJournal,
-  cancelTurn: StructuredAgentSessionAdapter['cancelTurn'],
-  flushStreamedEvents: () => Promise<void>
+  cancelTurn: StructuredAgentSessionAdapter['cancelTurn']
 ): AgentSessionTurnContext {
   return {
+    logger: createStructuredAgentSessionLogger(),
     sessionId: 'session-1',
     journal,
     fence: 1,
+    agents: NO_STRUCTURED_AGENTS,
+    agent: 'codex',
     adapter: { cancelTurn } as unknown as StructuredAgentSessionAdapter,
     persistOptions: async () => undefined,
     resolvedBy: 'client-1',
     publish: vi.fn(),
-    flushStreamedEvents,
     now: () => 1
   }
 }
@@ -97,9 +106,8 @@ describe('performCancel for a pending prompt', () => {
   it('refuses a stale prompt revision before reaching the provider', async () => {
     const { journal, itemId } = await pendingPrompt()
     const cancelTurn = vi.fn(async () => ({ cancelled: true }))
-    const flush = vi.fn(async () => undefined)
 
-    const result = await performCancel(context(journal, cancelTurn, flush), {
+    const result = await performCancel(context(journal, cancelTurn), {
       clientOperationId: 'cancel-1',
       turnId: 'turn-1',
       prompt: { itemId, expectedRevision: 2 }
@@ -110,18 +118,65 @@ describe('performCancel for a pending prompt', () => {
       refusal: { code: 'agent_session_item_revision_stale', currentRevision: 1 }
     })
     expect(cancelTurn).not.toHaveBeenCalled()
-    expect(flush).not.toHaveBeenCalled()
   })
 
-  it('drains terminal lifecycle before recording a confirmed cancellation', async () => {
+  it("records a confirmed cancellation after the prompt's own terminal row", async () => {
     const { journal, itemId } = await pendingPrompt()
     const order: string[] = []
     const cancelTurn = vi.fn(async () => {
       order.push('interrupt')
+      const current = journal.snapshot().items.find((item) => item.itemId === itemId)!
+      if (current.body.kind !== 'approval') {
+        throw new Error('expected approval prompt')
+      }
+      // The provider's frame, issued during the interrupt and not yet landed when it answers.
+      void journal
+        .appendItem(
+          PROMPT_IDENTITY,
+          {
+            ...current.body,
+            resolution: {
+              state: 'cancelled',
+              selectedOptionId: null,
+              resolvedBy: null,
+              resolvedAt: null
+            }
+          },
+          { fence: 1, turnScope: AGENT_JOURNAL_THREAD_SCOPE }
+        )
+        .then(() => order.push('lifecycle'))
       return { cancelled: true }
     })
-    const flush = vi.fn(async () => {
-      order.push('lifecycle')
+
+    await expect(
+      performCancel(context(journal, cancelTurn), {
+        clientOperationId: 'cancel-1',
+        turnId: 'turn-1',
+        prompt: { itemId, expectedRevision: 1 }
+      })
+    ).resolves.toEqual({ ok: true, value: { turnId: 'turn-1', cancelled: true } })
+
+    expect(order).toEqual(['interrupt', 'lifecycle'])
+    expect(cancelTurn).toHaveBeenCalledWith({
+      sessionId: 'session-1',
+      turnId: 'turn-1',
+      fence: 1,
+      resolveLiveTurnId: expect.any(Function),
+      prompt: { itemId }
+    })
+    const items = journal.snapshot().items
+    expect(items.map((item) => item.body)).toEqual([
+      expect.objectContaining({ resolution: expect.objectContaining({ state: 'cancelled' }) }),
+      { kind: 'status', text: 'Cancellation requested.' }
+    ])
+    // Issued after the prompt's terminal row, so it lands after it.
+    expect(items[1]!.sequence).toBeGreaterThan(items[0]!.sequence)
+  })
+
+  it('answers another Cancel of the prompt it cancelled quietly, without reaching the provider', async () => {
+    const { journal, itemId } = await pendingPrompt()
+    // The provider's own cancel of the card, issued while it takes the interrupt.
+    const cancelTurn = vi.fn(async () => {
       const current = journal.snapshot().items.find((item) => item.itemId === itemId)!
       if (current.body.kind !== 'approval') {
         throw new Error('expected approval prompt')
@@ -139,37 +194,63 @@ describe('performCancel for a pending prompt', () => {
         },
         { fence: 1, turnScope: AGENT_JOURNAL_THREAD_SCOPE }
       )
+      return { cancelled: true }
     })
-
-    await expect(
-      performCancel(context(journal, cancelTurn, flush), {
-        clientOperationId: 'cancel-1',
+    const ctx = context(journal, cancelTurn)
+    const cancel = (clientOperationId: string) =>
+      performCancel(ctx, {
+        clientOperationId,
         turnId: 'turn-1',
         prompt: { itemId, expectedRevision: 1 }
       })
-    ).resolves.toEqual({ ok: true, value: { turnId: 'turn-1', cancelled: true } })
 
-    expect(order).toEqual(['interrupt', 'lifecycle'])
-    expect(cancelTurn).toHaveBeenCalledWith({
-      sessionId: 'session-1',
-      turnId: 'turn-1',
-      fence: 1,
-      resolveLiveTurnId: expect.any(Function),
-      prompt: { itemId }
+    await cancel('cancel-1')
+    const rows = journal.snapshot().items.length
+
+    // The second press names the revision it saw, which the first moved on.
+    await expect(cancel('cancel-2')).resolves.toEqual({
+      ok: true,
+      value: { turnId: 'turn-1', cancelled: false }
     })
-    expect(journal.snapshot().items.map((item) => item.body)).toEqual([
-      expect.objectContaining({ resolution: expect.objectContaining({ state: 'cancelled' }) }),
-      { kind: 'status', text: 'Cancellation requested.' }
-    ])
+    expect(cancelTurn).toHaveBeenCalledOnce()
+    expect(journal.snapshot().items).toHaveLength(rows)
+  })
+
+  it('still refuses a Cancel of a prompt that was answered', async () => {
+    const { journal, itemId } = await pendingPrompt()
+    const current = journal.snapshot().items.find((item) => item.itemId === itemId)!
+    if (current.body.kind !== 'approval') {
+      throw new Error('expected approval prompt')
+    }
+    await journal.appendItem(
+      PROMPT_IDENTITY,
+      {
+        ...current.body,
+        resolution: { state: 'resolved', selectedOptionId: 'allow', resolvedBy: 'c', resolvedAt: 1 }
+      },
+      { fence: 1, turnScope: AGENT_JOURNAL_THREAD_SCOPE }
+    )
+    const cancelTurn = vi.fn(async () => ({ cancelled: true }))
+
+    const result = await performCancel(context(journal, cancelTurn), {
+      clientOperationId: 'cancel-1',
+      turnId: 'turn-1',
+      prompt: { itemId, expectedRevision: 1 }
+    })
+
+    expect(result).toMatchObject({
+      ok: false,
+      refusal: { code: 'agent_session_item_revision_stale', details: { reason: 'promptMoved' } }
+    })
+    expect(cancelTurn).not.toHaveBeenCalled()
   })
 
   it('keeps the callback answerable when interruption is declined', async () => {
     const { journal, itemId } = await pendingPrompt()
-    const flush = vi.fn(async () => undefined)
 
     await expect(
       performCancel(
-        context(journal, async () => ({ cancelled: false }), flush),
+        context(journal, async () => ({ cancelled: false })),
         {
           clientOperationId: 'cancel-1',
           turnId: 'turn-1',
@@ -178,26 +259,19 @@ describe('performCancel for a pending prompt', () => {
       )
     ).resolves.toEqual({ ok: true, value: { turnId: 'turn-1', cancelled: false } })
 
-    expect(flush).not.toHaveBeenCalled()
     expect(journal.snapshot().items.map((item) => item.body)).toEqual([
-      expect.objectContaining({ resolution: expect.objectContaining({ state: 'pending' }) }),
-      { kind: 'status', text: 'The provider had already finished this turn.' }
+      expect.objectContaining({ resolution: expect.objectContaining({ state: 'pending' }) })
     ])
   })
 
   it('propagates an unconfirmed adapter failure and leaves the prompt pending', async () => {
     const { journal, itemId } = await pendingPrompt()
-    const flush = vi.fn(async () => undefined)
 
     await expect(
       performCancel(
-        context(
-          journal,
-          async () => {
-            throw new Error('interrupt receipt lost')
-          },
-          flush
-        ),
+        context(journal, async () => {
+          throw new Error('interrupt receipt lost')
+        }),
         {
           clientOperationId: 'cancel-1',
           turnId: 'turn-1',
@@ -206,29 +280,9 @@ describe('performCancel for a pending prompt', () => {
       )
     ).rejects.toThrow('interrupt receipt lost')
 
-    expect(flush).not.toHaveBeenCalled()
     expect(journal.snapshot().items.map((item) => item.body)).toEqual([
       expect.objectContaining({ resolution: expect.objectContaining({ state: 'pending' }) })
     ])
-  })
-
-  it('surfaces a lifecycle drain failure after the provider confirms interruption', async () => {
-    const { journal, itemId } = await pendingPrompt()
-    const flush = vi.fn(async () => {
-      throw new Error('journal drain failed')
-    })
-
-    await expect(
-      performCancel(
-        context(journal, async () => ({ cancelled: true }), flush),
-        {
-          clientOperationId: 'cancel-1',
-          turnId: 'turn-1',
-          prompt: { itemId, expectedRevision: 1 }
-        }
-      )
-    ).rejects.toThrow('journal drain failed')
-    expect(journal.snapshot().items).toHaveLength(1)
   })
 })
 
@@ -237,19 +291,20 @@ describe("a card's own Cancel, as its provider answers it", () => {
     answer: AgentSessionPromptCancelRoute | undefined,
     revision = 1,
     endsSession = true,
-    inLiveTurn = true
+    inLiveTurn = true,
+    subject?: AgentJournalApprovalSubject
   ) {
     const { journal, itemId } = await pendingPrompt(
       [
         { id: 'allow', label: 'Allow' },
         { id: 'deny', label: 'Deny' }
       ],
-      inLiveTurn
+      inLiveTurn,
+      subject
     )
     const ctx = context(
       journal,
-      vi.fn(async () => ({ cancelled: true })),
-      vi.fn(async () => undefined)
+      vi.fn(async () => ({ cancelled: true }))
     )
     const answerPrompt = vi.fn<StructuredAgentSessionAdapter['answerPrompt']>(async (input) => {
       await input.commit()
@@ -275,6 +330,35 @@ describe("a card's own Cancel, as its provider answers it", () => {
     const card = journal.snapshot().items.find((item) => item.itemId === itemId)?.body
     return { result, routes, answerPrompt, dismissPrompt, card }
   }
+
+  describe('on an approval whose subject a newer Orca wrote, which only its Cancel answers', () => {
+    const NEWER_SUBJECT: AgentJournalApprovalSubject = JSON.parse('{"kind":"diff","path":"a.ts"}')
+
+    it('has Claude decline the request, the turn going on, and keeps the subject as it was', async () => {
+      const { routes, dismissPrompt, card } = await cancelCard(
+        { kind: 'dismiss' },
+        1,
+        true,
+        true,
+        NEWER_SUBJECT
+      )
+
+      expect(dismissPrompt).toHaveBeenCalledWith(expect.objectContaining({ answer: true }))
+      expect(routes.interrupt).not.toHaveBeenCalled()
+      expect(routes.stop).not.toHaveBeenCalled()
+      expect(card).toMatchObject({
+        subject: { kind: 'diff', path: 'a.ts' },
+        resolution: { state: 'cancelled' }
+      })
+    })
+
+    it('has Codex end the turn holding it', async () => {
+      const { routes, dismissPrompt } = await cancelCard(undefined, 1, true, true, NEWER_SUBJECT)
+
+      expect(routes.interrupt).toHaveBeenCalledOnce()
+      expect(dismissPrompt).not.toHaveBeenCalled()
+    })
+  })
 
   it('interrupts the turn holding the card for a provider that gives no answer', async () => {
     const { routes, answerPrompt } = await cancelCard(undefined)
@@ -323,8 +407,7 @@ describe("a card's own Cancel, as its provider answers it", () => {
     const { journal, itemId } = await pendingPrompt()
     const ctx = context(
       journal,
-      vi.fn(async () => ({ cancelled: true })),
-      vi.fn(async () => undefined)
+      vi.fn(async () => ({ cancelled: true }))
     )
     Object.assign(ctx.adapter, {
       dismissPrompt: async () => {

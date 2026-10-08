@@ -18,6 +18,9 @@ import {
 } from '../native-chat/agent-session-wire/structured-agent-session-host-test-data'
 import { createCodexJournalTranslator } from './codex-structured-journal-translation'
 import { openTestJournalHostDatabase } from '../native-chat/agent-session-journal/journal-host-database-test-support'
+import { createStructuredAgentSessionLogger } from '../native-chat/agent-session-wire/structured-agent-session-logger'
+import { codexProviderHandle } from '../../shared/agent-session-provider-handle-encoding'
+import { NO_STRUCTURED_AGENTS } from '../native-chat/agent-session-wire/structured-agent-session-adapter-router-test-support'
 
 const SWEEP_MS = 5
 const RETRY_GAP_MS = 10 * 60_000
@@ -60,7 +63,7 @@ beforeEach(async () => {
         acquisitionGeneration: 'generation-1',
         link: {
           linkId: `link-${fence}`,
-          handle: { provider: 'codex', threadId: THREAD },
+          handle: codexProviderHandle(THREAD),
           origin: 'created',
           mintedAtFence: fence,
           observedAt: NOW
@@ -75,6 +78,8 @@ beforeEach(async () => {
     setOption: async () => undefined
   }
   host = new StructuredAgentSessionHost({
+    agents: NO_STRUCTURED_AGENTS,
+    logger: createStructuredAgentSessionLogger(),
     store,
     adapter,
     journalDatabase: openTestJournalHostDatabase(root),
@@ -132,7 +137,7 @@ describe('a Codex reconnecting a dropped stream', () => {
     // Once the frames stop, the same clock does let the sweep close it.
     clock += STRUCTURED_AGENT_SESSION_IDLE_MS
     await vi.waitFor(() => {
-      expect(closeSession).toHaveBeenCalledWith(SESSION, 'evict')
+      expect(closeSession).toHaveBeenCalledWith(SESSION)
       expect(host.hasSession(SESSION)).toBe(false)
     })
   })

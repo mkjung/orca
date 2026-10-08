@@ -12,6 +12,7 @@ vi.mock('electron', () => ({ app: { getAppPath: () => process.cwd() } }))
 
 import { ORCAD_RUNTIMES_DIRNAME } from '../../shared/orcad-artifacts'
 import { RELAY_REMOTE_DIR } from './relay-protocol'
+import { WINDOWS_RELAY_LAUNCH_LOG_PREFIX } from './ssh-relay-windows-launch-command'
 import type { SshConnection } from './ssh-connection'
 import { localHostObserver } from './ssh-hostile-host-observer'
 import {
@@ -30,6 +31,7 @@ import {
   type WindowsSessionCommandAudit
 } from './ssh-session-command-audit'
 import {
+  isWindowsHostCellId,
   readWindowsHostCellDescriptor,
   windowsHostCell,
   windowsHostSshTarget
@@ -53,6 +55,9 @@ describe.runIf(RUN)('SSH relay on a Windows OpenSSH host', () => {
     'lands the cell the descriptor names',
     async () => {
       const descriptor = readWindowsHostCellDescriptor(process.env.ORCA_SSH_WINDOWS_HOST_CELL ?? '')
+      if (!isWindowsHostCellId(descriptor.cell)) {
+        throw new Error(`${descriptor.cell} does not run in the relay lane`)
+      }
       const cell = windowsHostCell(descriptor.cell, descriptor.target)
       const observer = localHostObserver(descriptor.forbiddenToolLog)
       const sshTarget = windowsHostSshTarget(descriptor, cell, randomUUID())
@@ -63,7 +68,21 @@ describe.runIf(RUN)('SSH relay on a Windows OpenSSH host', () => {
         const violations = windowsSessionCommandViolations(audit, { uploaded })
         expect(violations, `${cell.id}: ${violations.join('; ')}`).toEqual([])
       }
-      const receipt: Record<string, unknown> = { cell: cell.id, target: descriptor.target, audits }
+      const receipt: Record<string, unknown> = {
+        cell: cell.id,
+        target: descriptor.target,
+        audits
+      }
+      // The deploy logs each relay launch; the cell reads them to prove which route ran.
+      const launches: unknown[] = []
+      const logSpy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+        const line = args.map(String).join(' ')
+        if (line.startsWith(WINDOWS_RELAY_LAUNCH_LOG_PREFIX)) {
+          launches.push(JSON.parse(line.slice(WINDOWS_RELAY_LAUNCH_LOG_PREFIX.length)))
+        }
+        process.stdout.write(`${line}\n`)
+      })
+      receipt.launches = launches
       let conn: SshConnection | null = null
       try {
         conn = await connectHostileHost(sshTarget)
@@ -87,6 +106,9 @@ describe.runIf(RUN)('SSH relay on a Windows OpenSSH host', () => {
             inspectDeploy
           })
           Object.assign(receipt, evidence, { reused: true, gcKeptInUse: true })
+          // One launch, outside sshd's job with no WMI grant; the second connect launched nothing,
+          // so it adopted the relay that outlived the first SSH connection.
+          expect(launches).toEqual([{ method: 'breakaway', pid: expect.any(Number), inJob: false }])
         } else {
           // Opted out: nothing may enter the pinned runtime store, whatever the host-Node path did.
           const store = `${descriptor.home}/${RELAY_REMOTE_DIR}/${ORCAD_RUNTIMES_DIRNAME}`
@@ -95,6 +117,7 @@ describe.runIf(RUN)('SSH relay on a Windows OpenSSH host', () => {
         }
         receipt.passed = true
       } finally {
+        logSpy.mockRestore()
         await conn?.disconnect().catch(() => {})
         writeFileSync(descriptor.receipt, `${JSON.stringify(receipt, null, 2)}\n`)
       }

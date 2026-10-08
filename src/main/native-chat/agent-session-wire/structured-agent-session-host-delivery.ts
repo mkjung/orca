@@ -3,8 +3,7 @@
 // with a message queued has a delivery loop — and the open is where a loop for leftovers wakes.
 
 import { isQueuedAgentJournalSubmission } from '../../../shared/agent-session-queued-submission'
-import { abandonQueuedStructuredAgentSessionMessages } from './structured-agent-session-host-lifetime'
-import type { AgentJournalResetReason } from '../../../shared/agent-session-journal-types'
+import { holdClosedStructuredAgentSessionSends } from './structured-agent-session-host-lifetime'
 import type { AgentSessionJournal } from '../agent-session-journal/journal-store'
 import {
   openStructuredAgentSessionConversation,
@@ -35,6 +34,9 @@ export type StructuredAgentSessionConversationDelivery = {
    *  queue. Enqueued through the session's serialize, never read here, so a commit that lands while
    *  a step is deciding to stop wakes the loop after that step rather than being lost to it. */
   afterCommit: (sessionId: string, journal: AgentSessionJournal) => void
+  /** A person's Stop settle opened or closed. It writes no row, so only what reads the settle
+   *  moves: the session's status row and the steer hold's handover. Never activity. */
+  afterSettleEdge: (sessionId: string, journal: AgentSessionJournal) => void
   /** Stops the loop and the resettle on a proof of death; quit's first step. */
   dispose: () => void
   /** Indexes a conversation some other open produced, as `open` would have. */
@@ -54,23 +56,28 @@ export function createStructuredAgentSessionConversationDelivery(input: {
     sessionId: string,
     startedFor: string
   ) => Promise<StructuredAgentSessionResumeOutcome>
-  reset: (sessionId: string, journal: AgentSessionJournal, reset: AgentJournalResetReason) => void
-  clientDelivery: Pick<StructuredAgentSessionClientDelivery, 'publishRestored' | 'readChildWork'>
-  flushStreamedEvents: (sessionId: string) => Promise<void>
+  clientDelivery: Pick<
+    StructuredAgentSessionClientDelivery,
+    'publishRestored' | 'readChildWork' | 'readStopping' | 'publishStatus'
+  >
 }): StructuredAgentSessionConversationDelivery {
   const { deps, sessions } = input
   const loop = new StructuredAgentSessionDeliveryLoop({
     sessions,
     adapter: deps.adapter,
+    agents: deps.agents,
     serialize: input.serialize,
     trackStart: input.trackStart,
     ensureProviderChild: input.ensureProviderChild,
     conversationFence: (sessionId) =>
       structuredAgentSessionConversationFence(deps.store, sessionId),
-    abandonQueued: async (sessionId, which) => {
+    holdClosed: async (sessionId, which) => {
       const session = sessions.get(sessionId)
       return session
-        ? abandonQueuedStructuredAgentSessionMessages(deps, sessionId, session.journal, which)
+        ? holdClosedStructuredAgentSessionSends(deps, sessionId, session.journal, {
+            mark: 'settled',
+            which
+          })
         : true
     },
     failureTextContext: (sessionId) =>
@@ -78,21 +85,18 @@ export function createStructuredAgentSessionConversationDelivery(input: {
         deps.store.getRecord(sessionId),
         sessions.get(sessionId)?.journal
       ),
-    onError: (sessionId, error) => deps.onEventSinkError?.({ sessionId, error }),
+    logger: deps.logger,
     record: (sessionId) => deps.store.getRecord(sessionId),
     readChildWork: input.clientDelivery.readChildWork,
-    flushStreamedEvents: input.flushStreamedEvents,
+    stopping: input.clientDelivery.readStopping,
     now: () => deps.now?.() ?? Date.now()
   })
   const adoptOpened = async (
     sessionId: string,
     opened: OpenedStructuredAgentSessionConversation
   ): Promise<void> => {
-    const { session, reset } = opened
+    const { session } = opened
     sessions.set(sessionId, session)
-    if (reset) {
-      input.reset(sessionId, session.journal, reset)
-    }
     input.clientDelivery.publishRestored(sessionId)
     await settleInterruptedCommands(deps, sessionId, session)
     if (session.journal.submissions().some(isQueuedAgentJournalSubmission)) {
@@ -116,7 +120,11 @@ export function createStructuredAgentSessionConversationDelivery(input: {
       })
       .catch((error: unknown) => {
         wakesQueued.delete(sessionId)
-        deps.onEventSinkError?.({ sessionId, error })
+        deps.logger.warn('waking the delivery loop after a commit failed', {
+          scope: 'delivery-wake',
+          sessionId,
+          error
+        })
       })
   }
   // A chat open before its owner's death was proven revises what its open settled. Queued, never
@@ -129,12 +137,22 @@ export function createStructuredAgentSessionConversationDelivery(input: {
             resettleOpenStructuredAgentSessionConversation(deps, sessionId, sessions.get(sessionId))
           )
         )
-        .catch((error: unknown) => deps.onEventSinkError?.({ sessionId, error }))
+        .catch((error: unknown) =>
+          deps.logger.warn('resettling an open chat after its owner died failed', {
+            scope: 'death-evidence-resettle',
+            sessionId,
+            error
+          })
+        )
     }
   })
   return {
     loop,
     afterCommit,
+    afterSettleEdge: (sessionId, journal) => {
+      input.clientDelivery.publishStatus(sessionId)
+      afterCommit(sessionId, journal)
+    },
     adoptOpened,
     dispose: () => {
       loop.dispose()
@@ -158,8 +176,12 @@ async function settleInterruptedCommands(
 ): Promise<void> {
   const fence = structuredAgentSessionConversationFence(deps.store, sessionId)
   try {
-    await recoverStructuredRewind(deps.store, sessionId, session.journal, fence)
+    await recoverStructuredRewind(deps, sessionId, session.journal, fence)
   } catch (error) {
-    deps.onEventSinkError?.({ sessionId, error })
+    deps.logger.warn('settling an interrupted rewind on open failed', {
+      scope: 'rewind-recovery',
+      sessionId,
+      error
+    })
   }
 }

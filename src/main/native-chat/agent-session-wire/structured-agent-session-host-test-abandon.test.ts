@@ -19,6 +19,9 @@ import {
   hostTestMessage
 } from './structured-agent-session-host-test-data'
 import { openTestJournalHostDatabase } from '../agent-session-journal/journal-host-database-test-support'
+import { createStructuredAgentSessionLogger } from './structured-agent-session-logger'
+import { codexProviderHandle } from '../../../shared/agent-session-provider-handle-encoding'
+import { NO_STRUCTURED_AGENTS } from './structured-agent-session-adapter-router-test-support'
 
 const CALLER = { callerKey: 'client-1' }
 
@@ -49,7 +52,7 @@ describe('abandoning a structured agent-session host', () => {
           },
           link: {
             linkId: `link-${fence}`,
-            handle: { provider: 'codex', threadId: THREAD },
+            handle: codexProviderHandle(THREAD),
             origin: 'created',
             mintedAtFence: fence,
             observedAt: NOW
@@ -66,6 +69,8 @@ describe('abandoning a structured agent-session host', () => {
       setOption: async () => undefined
     }
     const host = new StructuredAgentSessionHost({
+      agents: NO_STRUCTURED_AGENTS,
+      logger: createStructuredAgentSessionLogger(),
       store,
       adapter,
       probeOwner: async () => ({
