@@ -9,6 +9,7 @@ import {
 import {
   readWindowsOrcadLaunchReport,
   readWindowsOrcadSlotRuntime,
+  readWindowsOrcadSlotEntry,
   windowsOrcadLaunchCommand,
   windowsOrcadLaunchRuntimeCommand
 } from './orcad-remote-launch-windows'
@@ -104,14 +105,17 @@ export async function launchOrcadAndAwaitReadiness(
   spec: OrcadLaunchSpec
 ): Promise<OrcadReadinessParse> {
   if (isWindowsRemoteHost(target.host)) {
-    const slotRuntime = readWindowsOrcadSlotRuntime(
+    const slotAnswer = await execOrcadRemote(
+      target,
+      windowsOrcadLaunchRuntimeCommand(target.host, spec.remoteInstallDir)
+    )
+    const slotRuntime = readWindowsOrcadSlotRuntime(slotAnswer)
+    const slotEntry = readWindowsOrcadSlotEntry(slotAnswer, target.host, spec.remoteInstallDir)
+    readWindowsOrcadLaunchReport(
       await execOrcadRemote(
         target,
-        windowsOrcadLaunchRuntimeCommand(target.host, spec.remoteInstallDir)
+        windowsOrcadLaunchCommand(target.host, spec, slotRuntime, slotEntry)
       )
-    )
-    readWindowsOrcadLaunchReport(
-      await execOrcadRemote(target, windowsOrcadLaunchCommand(target.host, spec, slotRuntime))
     )
   } else {
     await execOrcadRemote(target, orcadLaunchCommand(target.host, spec))
@@ -134,7 +138,11 @@ export async function launchOrcadAndAwaitReadiness(
         orcadReadinessWaitCommand(target.host, spec.remoteInstallDir, waitSeconds)
       )
     } catch (error) {
-      if (isUnconfirmedSshCommandTermination(error) || error instanceof OrcadFenceLostError) {
+      if (
+        (error instanceof Error && error.name === 'AbortError') ||
+        isUnconfirmedSshCommandTermination(error) ||
+        error instanceof OrcadFenceLostError
+      ) {
         throw error
       }
       // Why retry: a failed read (a refused channel, a timed-out wait) says nothing about the
@@ -144,6 +152,7 @@ export async function launchOrcadAndAwaitReadiness(
       await sleep(READINESS_RETRY_PAUSE_MS)
       continue
     }
+    target.signal?.throwIfAborted()
     lastWaitError = undefined
     last = parseOrcadReadinessWaitOutput(target.host, output)
     if (last.state !== 'pending') {
