@@ -1,6 +1,7 @@
 import { createWebRuntimeSessionBrowserTab } from '@/runtime/web-runtime-browser-creation'
 import { useAppStore } from '@/store'
 import type { AppState } from '@/store/types'
+import { resolveNewBrowserTabProfile } from '@/store/slices/browser/browser-new-tab-profile'
 import {
   LOCAL_EXECUTION_HOST_ID,
   parseExecutionHostId,
@@ -12,6 +13,7 @@ import { BROWSER_SCREENCAST_RUNTIME_CAPABILITY } from '../../../shared/protocol-
 import type { BrowserClientHostPlacementPreference } from '../../../shared/browser-client-host-placement'
 import {
   getClientCreationActionPolicy,
+  runtimeHostsPagesOnThisDesktop,
   type ClientCreationActionAvailability
 } from './client-creation-action-policy'
 import { resolveWorktreeOperationRoute } from './worktree-operation-route'
@@ -58,7 +60,8 @@ function isExpectedRuntimeBrowserRoute(
     state.runtimeStatusByEnvironmentId?.get(expectedEnvironmentId)?.status?.capabilities
   if (
     environmentId !== expectedEnvironmentId ||
-    !capabilities?.includes(BROWSER_SCREENCAST_RUNTIME_CAPABILITY)
+    (!capabilities?.includes(BROWSER_SCREENCAST_RUNTIME_CAPABILITY) &&
+      !runtimeHostsPagesOnThisDesktop(state, expectedEnvironmentId))
   ) {
     return false
   }
@@ -178,9 +181,7 @@ function createClientBrowserTab(
       browserRuntimeEnvironmentId: null,
       focusAddressBar: false,
       executionHostId: ownerHostId,
-      sessionProfileId:
-        state.defaultBrowserSessionProfileIdByHostId[hostId] ??
-        state.defaultBrowserSessionProfileId,
+      ...resolveNewBrowserTabProfile(state, request.workspaceId, hostId),
       targetGroupId: request.targetGroupId,
       ...(request.afterTabId ? { afterTabId: request.afterTabId } : {}),
       title: presentation.title

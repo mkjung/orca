@@ -1,12 +1,14 @@
-import { changePrompt, promptValue } from './native-chat-prompt-editor.test-support'
+import { changePrompt, endComposition, promptValue } from './native-chat-prompt-editor.test-support'
 // @vitest-environment happy-dom
 
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type * as nativeChatAgentProfiles from '../../../../shared/native-chat-agent-profiles'
 import type { NativeChatStructuredComposerTransport } from './native-chat-composer-types'
+import type * as RemoteRuntimePtyIdModule from '../../../../shared/remote-runtime-pty-id'
 
 vi.mock('@/i18n/i18n', () => ({
+  i18n: { language: 'en' },
   translate: (_key: string, fallback: string) => fallback
 }))
 const actions = vi.hoisted((): { sendDisabled: boolean | null } => ({ sendDisabled: null }))
@@ -35,8 +37,11 @@ vi.mock('../../store', () => {
   return { useAppStore }
 })
 vi.mock('@/runtime/runtime-terminal-inspection', () => ({
-  isRemoteRuntimePtyId: () => false,
   sendRuntimePtyInput: vi.fn()
+}))
+vi.mock('../../../../shared/remote-runtime-pty-id', async (importOriginal) => ({
+  ...(await importOriginal<typeof RemoteRuntimePtyIdModule>()),
+  isRemoteRuntimePtyId: () => false
 }))
 vi.mock('./native-chat-runtime-send', () => ({
   sendNativeChatMessage: vi.fn(),
@@ -303,6 +308,24 @@ describe('a withdrawn message put back during an IME composition', () => {
 
     expect(promptValue(input)).toBe('하\n\nwithdrawn')
     expect(readNativeChatDraftCache(pane)).toBe('하\n\nwithdrawn')
+  })
+})
+
+// Regression (#30159): a message ending in a composing syllable needed a second Enter.
+describe('the Enter that commits a Hangul composition', () => {
+  it('sends the message once, with its last syllable', async () => {
+    const structured = transport()
+    renderComposer(structured)
+    const input = textarea()
+
+    fireEvent.compositionStart(input)
+    changePrompt(input, '안녕하세요')
+    fireEvent.keyDown(input, { key: 'Process', keyCode: 229, isComposing: true })
+    endComposition(input, '요')
+    await act(async () => pressEnter(input))
+
+    expect(structured.send).toHaveBeenCalledOnce()
+    expect(structured.send).toHaveBeenCalledWith('안녕하세요', [])
   })
 })
 

@@ -2,8 +2,8 @@ import { LOCAL_EXECUTION_HOST_ID } from '../../../../../shared/execution-host'
 import { toast } from 'sonner'
 import { translate } from '@/i18n/i18n'
 import { getConnectionIdForFileFromState } from '@/lib/connection-owner-resolution'
-import { runtimeEnvironmentIdWithLegacyFallbackUnlessTwin } from '@/lib/worktree-runtime-owner'
-import { resolveOwner } from '@/lib/resolve-owner'
+import { runtimeEnvironmentIdOrLocalUnlessTwin } from '@/lib/worktree-runtime-owner'
+import { isTwinWorkspace } from '@/lib/resolve-owner'
 import { detectLanguage } from '@/lib/language-detect'
 import {
   buildWorkspaceFileContextForFile,
@@ -64,7 +64,7 @@ export function openDocPreviewExternally(document: DocPreviewDocument): void {
   // renders through was minted against the worktree's owner at render time, and a tab opened or
   // restored before that owner was known still carries null — which reads as local.
   const runtimeEnvironmentId =
-    runtimeEnvironmentIdWithLegacyFallbackUnlessTwin(state, document.worktreeId) ??
+    runtimeEnvironmentIdOrLocalUnlessTwin(state, document.worktreeId) ??
     document.runtimeEnvironmentId
   const fileContext = buildWorkspaceFileContextForFile(
     document.worktreeId,
@@ -81,7 +81,7 @@ export function openDocPreviewExternally(document: DocPreviewDocument): void {
     runtimeEnvironmentId === null &&
     worktreeRoot !== null &&
     // Why: a twin reads as "no server", which is not proof this machine holds the file.
-    resolveOwner(state, { workspaceId: document.worktreeId }).kind !== 'ambiguous'
+    !isTwinWorkspace(state, document.worktreeId)
   if (ownedByThisMachine && canClientOsOpenWorkspaceFile(fileContext)) {
     void window.api.shell.openFilePath(document.filePath, LOCAL_EXECUTION_HOST_ID)
     return

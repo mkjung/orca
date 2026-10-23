@@ -18,6 +18,10 @@ import {
   BrowserNetworkTunnelAttachParams
 } from '../browser-client-host-protocol'
 import { BrowserClientPageMetadataParams } from '../browser-client-page-metadata-protocol'
+import {
+  BundledSkillExecuteRequestSchema,
+  BundledSkillPlanRequestSchema
+} from '../bundled-skill-plan'
 import { DelegatedMobileDeviceSyncParamsSchema } from '../delegated-mobile-device-contract'
 import {
   DesktopBrowserBridgeAttachParams,
@@ -43,6 +47,10 @@ import {
   BeginClaudeSignInParams,
   ConsumeCodexResetCreditParams,
   FinishClaudeSignInParams,
+  HostAccountSignInCodeParams,
+  HostAccountSignInFlowParams,
+  HostAccountSignInStartParams,
+  HostAccountSignInWaitParams,
   ListAccountsParams,
   RemoveAccountParams,
   RemoveDataAccountParams,
@@ -169,6 +177,7 @@ import {
   SetValue,
   TypeText
 } from './computer-schemas-params'
+import { ConnectorSend, ConnectorStart } from './connector-params'
 import {
   AttachParams as AttachParamsOfEmulatorParams,
   AxParams,
@@ -197,7 +206,8 @@ import {
   FileRename,
   FileWrite,
   FileWriteBase64,
-  FileWriteBase64Chunk
+  FileWriteBase64Chunk,
+  FileWriteIfUnchanged
 } from './files-mutation-params'
 import {
   DocPreviewFileRead,
@@ -288,7 +298,7 @@ import {
   UpdatePrState,
   UpdatePrTitle
 } from './github-pull-request-update-params'
-import { RepoSelector, SlugRepo } from './github-repo-target-params'
+import { RepoSelector, RepoShow, SlugRepo } from './github-repo-target-params'
 import {
   IssuesList,
   RateLimit,
@@ -399,11 +409,13 @@ import { NativeChatSession, NativeChatUnsubscribe } from './native-chat-params'
 import {
   NotificationGetMissedSinceParams,
   NotificationRegisterPushParams,
+  NotificationReportDesktopPresenceParams,
   NotificationUnsubscribeParams,
   NotificationsSubscribeParams
 } from './notifications-params'
 import {
   OrcadMigrationCatalogParams,
+  OrcadMigrationCatalogReferenceParams,
   OrcadMigrationCommitCatalogParams
 } from './orcad-migration-params'
 import {
@@ -519,6 +531,7 @@ import {
   DictationHandle,
   DictationSetup,
   DictationStart,
+  OpenAiSpeechKeySet,
   SpeechModelAction
 } from './speech-params'
 import {
@@ -534,6 +547,7 @@ import {
   AcknowledgeAttentionParams,
   AgentsParams,
   AttachParams,
+  AvailabilityParams,
   CancelParams,
   ConversationCommandParams,
   CreateParams,
@@ -541,6 +555,7 @@ import {
   HandoffStatusParams,
   HistoryParams,
   HoldParams,
+  ItemParams,
   ModelCatalogParams,
   OptionsParams,
   QueuedMessageActionParams,
@@ -552,6 +567,7 @@ import {
   RewindParams,
   SendParams,
   SetOptionParams,
+  SleepWorkspaceParams,
   SubscribeParams,
   SubscribeTurnCompletionsParams,
   ThreadGoalParams,
@@ -601,13 +617,20 @@ import {
 } from './terminal-viewport-schemas-params'
 import { UpdaterCheckParams } from './updater-params'
 import {
+  UsageCredentialApiKeyParams,
+  UsageCredentialSessionCookieParams
+} from './usage-credentials-params'
+import { LayoutReopenHeldPanesParams } from './workspace-layout-held-panes-params'
+import {
   LayoutApplyParams,
+  LayoutReportViewParams,
   LayoutSubscribeParams,
   LayoutUnsubscribeParams
 } from './workspace-layout-params'
 import {
   WorkspacePortKillHostParams,
   WorkspacePortKillParams,
+  WorkspacePortProbePageParams,
   WorkspacePortScanHostParams,
   WorkspacePortScanParams
 } from './workspace-ports-params'
@@ -624,6 +647,7 @@ import {
   WorktreeResolvePrBase,
   WorktreeSelector as WorktreeSelectorOfWorktreeParams,
   WorktreeSet,
+  WorktreeSleepParams,
   WorktreeSortOrder,
   WorktreeTeardownMissingTerminalsParams
 } from './worktree-params'
@@ -662,8 +686,17 @@ export const RPC_PARAMS_BY_METHOD = {
   'accounts.cancelClaudeSignIn': FinishClaudeSignInParams,
   'accounts.consumeCodexResetCredit': ConsumeCodexResetCreditParams,
   'accounts.finishClaudeSignIn': FinishClaudeSignInParams,
+  'accounts.hostSignInCancel': HostAccountSignInFlowParams,
+  'accounts.hostSignInStart': HostAccountSignInStartParams,
+  'accounts.hostSignInSubmitCode': HostAccountSignInCodeParams,
+  'accounts.hostSignInWait': HostAccountSignInWaitParams,
   'accounts.list': ListAccountsParams,
   'accounts.listData': null,
+  'accounts.minimaxClearApiKey': null,
+  'accounts.minimaxClearSessionCookie': null,
+  'accounts.minimaxCredentialsStatus': null,
+  'accounts.minimaxSaveApiKey': UsageCredentialApiKeyParams,
+  'accounts.minimaxSaveSessionCookie': UsageCredentialSessionCookieParams,
   'accounts.removeClaude': RemoveAccountParams,
   'accounts.removeCodex': RemoveAccountParams,
   'accounts.removeData': RemoveDataAccountParams,
@@ -674,6 +707,9 @@ export const RPC_PARAMS_BY_METHOD = {
   'accounts.setHostLaunchEnv': HostAccountLaunchEnvParams,
   'accounts.subscribe': null,
   'accounts.unsubscribe': AccountsUnsubscribeParams,
+  'accounts.zcodePlanClearApiKey': null,
+  'accounts.zcodePlanCredentialsStatus': null,
+  'accounts.zcodePlanSaveApiKey': UsageCredentialApiKeyParams,
   'agent.launch': AgentLaunch,
   'agent.launchReplay': AgentLaunchReplay,
   'agentHooks.prepareCodexForWslPane': PrepareCodexForWslPaneParams,
@@ -692,6 +728,7 @@ export const RPC_PARAMS_BY_METHOD = {
   'agentSession.handoffStatus': HandoffStatusParams,
   'agentSession.history': HistoryParams,
   'agentSession.hold': HoldParams,
+  'agentSession.item': ItemParams,
   'agentSession.modelCatalog': ModelCatalogParams,
   'agentSession.options': OptionsParams,
   'agentSession.queuedMessageDelete': QueuedMessageActionParams,
@@ -700,6 +737,7 @@ export const RPC_PARAMS_BY_METHOD = {
   'agentSession.queuedMessageUpdate': QueuedMessageUpdateParams,
   'agentSession.queuedMessagesResume': QueuedMessagesResumeParams,
   'agentSession.readVisual': ReadVisualParams,
+  'agentSession.regenerateName': OptionsParams,
   'agentSession.release': HoldParams,
   'agentSession.respondToApproval': RespondParams,
   'agentSession.respondToQuestion': RespondToQuestionParams,
@@ -711,7 +749,9 @@ export const RPC_PARAMS_BY_METHOD = {
   'agentSession.rewind': RewindParams,
   'agentSession.send': SendParams,
   'agentSession.setOption': SetOptionParams,
+  'agentSession.sleepWorkspace': SleepWorkspaceParams,
   'agentSession.subscribe': SubscribeParams,
+  'agentSession.subscribeAvailability': AvailabilityParams,
   'agentSession.subscribeStatus': null,
   'agentSession.subscribeTurnCompletions': SubscribeTurnCompletionsParams,
   'agentSession.threadGoal': ThreadGoalParams,
@@ -854,6 +894,8 @@ export const RPC_PARAMS_BY_METHOD = {
   'computer.scroll': ScrollOfComputerSchemasParams,
   'computer.setValue': SetValue,
   'computer.typeText': TypeText,
+  'connector.send': ConnectorSend,
+  'connector.start': ConnectorStart,
   'desktopBrowserBridge.attach': DesktopBrowserBridgeAttachParams,
   'desktopBrowserBridge.result': DesktopBrowserBridgeResultParams,
   'diagnostics.memory': null,
@@ -905,6 +947,7 @@ export const RPC_PARAMS_BY_METHOD = {
   'files.write': FileWrite,
   'files.writeBase64': FileWriteBase64,
   'files.writeBase64Chunk': FileWriteBase64Chunk,
+  'files.writeIfUnchanged': FileWriteIfUnchanged,
   'files.writeTerminalArtifact': TerminalArtifactFileWrite,
   'folderWorkspace.create': FolderWorkspaceCreate,
   'folderWorkspace.delete': FolderWorkspaceSelector,
@@ -936,6 +979,7 @@ export const RPC_PARAMS_BY_METHOD = {
   'git.generatePullRequestFields': GitGeneratePullRequestFields,
   'git.history': GitHistory,
   'git.localBranches': WorktreeSelectorOfGitParams,
+  'git.mutationInFlight': WorktreeSelectorOfGitParams,
   'git.pull': GitTargetedRemote,
   'git.push': GitPush,
   'git.rebaseFromBase': GitRebaseFromBase,
@@ -1059,6 +1103,8 @@ export const RPC_PARAMS_BY_METHOD = {
   'jira.updateIssue': IssueUpdate,
   'layout.apply': LayoutApplyParams,
   'layout.getRemoteSnapshots': null,
+  'layout.reopenHeldPanes': LayoutReopenHeldPanesParams,
+  'layout.reportView': LayoutReportViewParams,
   'layout.subscribe': LayoutSubscribeParams,
   'layout.unsubscribe': LayoutUnsubscribeParams,
   'linear.addIssueComment': IssueCommentOfLinearParams,
@@ -1129,11 +1175,13 @@ export const RPC_PARAMS_BY_METHOD = {
   'network.browserTunnel': BrowserNetworkTunnelAttachParams,
   'notifications.getMissedSince': NotificationGetMissedSinceParams,
   'notifications.registerPush': NotificationRegisterPushParams,
+  'notifications.reportDesktopPresence': NotificationReportDesktopPresenceParams,
   'notifications.subscribe': NotificationsSubscribeParams,
   'notifications.testPush': null,
   'notifications.unregisterPush': null,
   'notifications.unsubscribe': NotificationUnsubscribeParams,
   'orcad.migration.abortCatalog': OrcadMigrationCatalogParams,
+  'orcad.migration.abortCatalogByReference': OrcadMigrationCatalogReferenceParams,
   'orcad.migration.catalogState': OrcadMigrationCatalogParams,
   'orcad.migration.commitCatalog': OrcadMigrationCommitCatalogParams,
   'orcad.migration.stageBlobChunk': OrcadMigrationBlobChunkRequestSchema,
@@ -1232,7 +1280,7 @@ export const RPC_PARAMS_BY_METHOD = {
   'repo.searchRefs': RepoSearchRefs,
   'repo.setBaseRef': RepoSetBaseRef,
   'repo.setupScriptImports': RepoSelector,
-  'repo.show': RepoSelector,
+  'repo.show': RepoShow,
   'repo.sparsePresets': RepoSelector,
   'repo.update': RepoUpdate,
   'runtime.automaticWork.resume': null,
@@ -1278,10 +1326,12 @@ export const RPC_PARAMS_BY_METHOD = {
   'skills.commitUpload': SkillUploadCommitRequestSchema,
   'skills.delete': SkillDeleteRequestSchema,
   'skills.discover': SkillsDiscoverParams,
+  'skills.executeBundledOrca': BundledSkillExecuteRequestSchema,
   'skills.getInstallProgress': SkillsGetInstallProgressParams,
   'skills.install': SkillInstallRequestSchema,
   'skills.installBundle': SkillBundleInstallRequestSchema,
   'skills.listManagedInstalls': null,
+  'skills.planBundledOrca': BundledSkillPlanRequestSchema,
   'skills.previewDelete': SkillDeleteRequestSchema,
   'skills.previewInstall': SkillInstallPreviewRequestSchema,
   'skills.removeInstall': SkillRemoveRequestSchema,
@@ -1295,6 +1345,9 @@ export const RPC_PARAMS_BY_METHOD = {
   'speech.models.delete': SpeechModelAction,
   'speech.models.download': SpeechModelAction,
   'speech.models.list': null,
+  'speech.openAiKey.clear': null,
+  'speech.openAiKey.set': OpenAiSpeechKeySet,
+  'speech.openAiKey.status': null,
   'ssh.addTarget': SshTargetAdd,
   'ssh.browseDir': SshBrowseDir,
   'ssh.connect': SshConnect,
@@ -1364,6 +1417,7 @@ export const RPC_PARAMS_BY_METHOD = {
   'updater.install': null,
   'workspacePorts.kill': WorkspacePortKillParams,
   'workspacePorts.killHost': WorkspacePortKillHostParams,
+  'workspacePorts.probePage': WorkspacePortProbePageParams,
   'workspacePorts.scan': WorkspacePortScanParams,
   'workspacePorts.scanHost': WorkspacePortScanHostParams,
   'worktree.activate': WorktreeActivate,
@@ -1382,7 +1436,7 @@ export const RPC_PARAMS_BY_METHOD = {
   'worktree.rm': WorktreeRemove,
   'worktree.set': WorktreeSet,
   'worktree.show': WorktreeSelectorOfWorktreeParams,
-  'worktree.sleep': WorktreeSelectorOfWorktreeParams,
+  'worktree.sleep': WorktreeSleepParams,
   'worktree.teardownMissingTerminals': WorktreeTeardownMissingTerminalsParams
 } as const
 

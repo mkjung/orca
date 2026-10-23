@@ -152,7 +152,7 @@ describe('orca serve service', () => {
     ).toThrow(/PATH/)
   })
   it('names the command to run when only a server-only orca exists here', async () => {
-    // The `orca` an SSH-launched Orca server puts on a remote host runs on plain Node.
+    // SSH server launchers run on plain Node, without an installed Electron desktop.
     const serverCli = (platform: NodeJS.Platform, path: string): ServeServiceDeps => {
       const base = deps(platform)
       const { ELECTRON_RUN_AS_NODE: _electron, ...env } = base.env
@@ -169,7 +169,6 @@ describe('orca serve service', () => {
       installServeService({ command: null, dryRun: true }, serverCli('darwin', scoped))
     ).rejects.toThrow(/`orca serve service install`/)
     expect(calls).toEqual([])
-    // An installed app's launcher on PATH (or named by --command) still works from that terminal.
     await expect(
       installServeService({ command: null, dryRun: true }, serverCli('linux', `${scoped}:${bin}`))
     ).resolves.toMatchObject({ dryRun: true })

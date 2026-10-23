@@ -16,6 +16,7 @@ export function MarkdownReader({
   onChange,
   onSave,
   onCopy,
+  onCopyPath,
   onDiscard,
   keyboardLift
 }: {
@@ -25,6 +26,7 @@ export function MarkdownReader({
   onChange: (content: string) => void
   onSave: () => void
   onCopy: () => void
+  onCopyPath: () => void
   onDiscard: () => void
   keyboardLift: number
 }) {
@@ -89,6 +91,14 @@ export function MarkdownReader({
             <Text style={styles.markdownFloatingButtonText}>
               {doc.truncated ? 'Copy loaded' : 'Copy'}
             </Text>
+          </Pressable>
+          <Pressable
+            style={styles.markdownFloatingButton}
+            onPress={onCopyPath}
+            accessibilityRole="button"
+            accessibilityLabel="Copy Markdown path"
+          >
+            <Text style={styles.markdownFloatingButtonText}>Copy path</Text>
           </Pressable>
           {showRefresh ? (
             <Pressable style={styles.markdownFloatingButton} onPress={onRefresh}>

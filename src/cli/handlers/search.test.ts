@@ -90,7 +90,6 @@ async function runSearch(
 
 type CliFlags = [string, string | boolean][]
 
-/** The printed envelope, narrowed by shape rather than asserted. */
 function printedEnvelope(output: string): { keys: string[]; result: unknown } {
   const parsed: unknown = JSON.parse(output)
   if (typeof parsed !== 'object' || parsed === null || !('result' in parsed)) {
@@ -99,7 +98,6 @@ function printedEnvelope(output: string): { keys: string[]; result: unknown } {
   return { keys: Object.keys(parsed), result: parsed.result }
 }
 
-/** Re-reads the printed result through the contract, so the shape is checked, not claimed. */
 function printedResults(output: string): Extract<AiVaultSearchResponse, { kind: 'results' }> {
   const parsed = AiVaultSearchResponseSchema.parse(printedEnvelope(output).result)
   if (parsed.kind !== 'results') {

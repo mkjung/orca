@@ -43,6 +43,7 @@ vi.mock('child_process', async () => {
 
 import { main } from './index'
 import { okFixture, queueFixtures } from './test-fixtures'
+import { PROJECT_HOST_SETUP_HOST_TARGET_RUNTIME_CAPABILITY } from '../shared/worktree-runtime-capabilities'
 import { pairRuntimeEnvironment, useWorktreeAwarenessEnvironment } from './index-test-harness'
 
 const ORCA_PROJECT = {
@@ -201,8 +202,6 @@ describe('orca cli worktree awareness', () => {
     expect(logSpy.mock.calls[0]?.[0]).not.toContain('setup-by-client')
   })
 
-  // Why: --host runtime:<id> routes to a paired server, so an older one is reachable without the
-  // caller meaning to. A raw method_not_found reads as an Orca bug rather than a version gap.
   it('names the version gap when the server predates project host setup', async () => {
     pairRuntimeEnvironment(listEnvironmentsMock, 'old-server')
     const { RuntimeClientError } = await import('./runtime/types.js')
@@ -230,11 +229,9 @@ describe('orca cli worktree awareness', () => {
 
     await main(['project', 'setups', '--host', 'runtime:not-a-real-env', '--json'], '/tmp/repo')
 
-    // The command itself never reached a runtime; only the suggestion lookup did.
     expect(callMock).not.toHaveBeenCalledWith('projectHostSetup.list')
     const printed = [...logSpy.mock.calls, ...errSpy.mock.calls].flat().join('\n')
     expect(printed).toContain('no paired Orca server is named or has id not-a-real-env')
-    // An agent reads the code and the retry candidates, not the prose.
     expect(JSON.parse(printed).error.code).toBe('invalid_argument')
     expect(JSON.parse(printed).error.data.knownEnvironments).toEqual([])
     expect(process.exitCode).toBe(1)
@@ -242,8 +239,6 @@ describe('orca cli worktree awareness', () => {
     process.exitCode = priorExitCode
   })
 
-  // Why: ssh: was never validated, so an unknown target answered ok:true with an empty list —
-  // the same silent wrong-machine answer unknown runtime ids used to give.
   it('rejects an unknown ssh host instead of answering empty', async () => {
     queueFixtures(callMock, okFixture('req_ssh_targets', { targets: [] }))
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
@@ -306,9 +301,6 @@ describe('orca cli worktree awareness', () => {
     expect(logSpy.mock.calls[0]?.[0]).toContain('setup-openclaw')
   })
 
-  // Why: `runtime:<id>` is a persisted token — it lands in ProjectHostSetup.hostId and is
-  // embedded in generated setup ids. Accepting a name is only safe because it is canonicalized
-  // to the id before anything downstream sees it; this pins that.
   it('never lets an environment name reach a persisted host id', async () => {
     pairRuntimeEnvironment(listEnvironmentsMock, 'env-uuid-1', 'awin')
     queueFixtures(
@@ -494,8 +486,6 @@ describe('orca cli worktree awareness', () => {
   })
 
   it('rejects SSH project setup relative paths, which name the client filesystem', async () => {
-    // A local CLI reaching an `ssh:*` host is still off-client: resolving `./orca` against the
-    // CLI cwd would register a path that exists on the wrong machine.
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
     const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const priorExitCode = process.exitCode
@@ -592,9 +582,6 @@ describe('orca cli worktree awareness', () => {
     }
   )
 
-  // Why: STA-4792 defect 2. `--host runtime:<id>` used to leave the client local, so a Windows
-  // destination fell into resolve(cwd, ...) and became a literal directory next to the caller.
-  // Routing makes the client remote, which is what sends the path through untouched.
   it('sends a windows destination to the routed host instead of joining it to the local cwd', async () => {
     pairRuntimeEnvironment(listEnvironmentsMock, 'awin')
     queueFixtures(
@@ -791,11 +778,13 @@ describe('orca cli worktree awareness', () => {
   })
 
   it.each([
-    { flags: [], force: false },
-    { flags: ['--force'], force: true }
-  ])('deletes project host setup metadata with force=$force', async ({ flags, force }) => {
+    { flags: [], force: false, hostId: undefined },
+    { flags: ['--force'], force: true, hostId: undefined },
+    { flags: ['--host', 'local'], force: false, hostId: 'local' }
+  ])('deletes project host setup metadata with $flags', async ({ flags, force, hostId }) => {
     queueFixtures(
       callMock,
+      ...(hostId ? [hostTargetStatusFixture(true)] : []),
       okFixture('req_project_setup_delete', {
         result: {
           project: {
@@ -827,7 +816,26 @@ describe('orca cli worktree awareness', () => {
 
     expect(callMock).toHaveBeenCalledWith('projectHostSetup.delete', {
       setupId: 'setup-gpu',
+      hostId,
       force
     })
   })
+
+  it('refuses --host on a server that would ignore it and act on the first same-id twin', async () => {
+    queueFixtures(callMock, hostTargetStatusFixture(false))
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await main(
+      ['project', 'setup-delete', '--setup', 'dup', '--host', 'local', '--force', '--json'],
+      '/tmp/repo'
+    )
+
+    expect(callMock).not.toHaveBeenCalledWith('projectHostSetup.delete', expect.anything())
+  })
 })
+
+function hostTargetStatusFixture(supported: boolean) {
+  return okFixture('req_status', {
+    capabilities: supported ? [PROJECT_HOST_SETUP_HOST_TARGET_RUNTIME_CAPABILITY] : []
+  })
+}

@@ -1,10 +1,7 @@
 // Projects OSC 7501 records onto agent-status payloads so they ride the OSC 9999 terminal-status ingress.
 import type { AgentStatusState, ParsedAgentStatusPayload } from '../agent-status-types'
 import type { AgentSubagentSnapshot, AgentSubagentState } from '../agent-status-subagent-snapshot'
-import {
-  AGENT_STATUS_MAX_SUBAGENTS,
-  AGENT_SUBAGENT_ID_MAX_LENGTH
-} from '../agent-status-subagent-snapshot'
+import { AGENT_SUBAGENT_ID_MAX_LENGTH } from '../agent-status-subagent-snapshot'
 import type { AgentTurnOutcome } from '../agent-turn-outcome'
 import { createProgramStatusOscScanner } from './osc-scanner'
 import {
@@ -13,6 +10,7 @@ import {
   programStatusFacetsEqual,
   type ProgramStatusFacet
 } from './facet'
+import { isTurnScopedProgramStatusKind } from './protocol'
 import { ProgramStatusRecordSet, type ProgramStatusRecord } from './records'
 
 /** OSC 7501 `app` ids whose Orca agent id differs. Other apps pass through verbatim. */
@@ -43,8 +41,8 @@ function boundedChildId(id: string): string {
 }
 
 function blockedState(record: ProgramStatusRecord): 'waiting' | 'blocked' {
-  // Why: Orca's hooks report approvals and questions as `waiting`; auth and unnamed blocks stay `blocked`.
-  return record.kind === 'permission' || record.kind === 'question' ? 'waiting' : 'blocked'
+  // Why: Orca's hooks report approvals and questions as `waiting`.
+  return isTurnScopedProgramStatusKind(record.kind) ? 'waiting' : 'blocked'
 }
 
 function subagentState(record: ProgramStatusRecord): AgentSubagentState | null {
@@ -160,7 +158,7 @@ export function createProgramStatusProjector(now: () => number = Date.now): Prog
         childStartedAt.delete(id)
       }
     }
-    return children.slice(-AGENT_STATUS_MAX_SUBAGENTS)
+    return children
   }
 
   const project = (): ParsedAgentStatusPayload | null => {

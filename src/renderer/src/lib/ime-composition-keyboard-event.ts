@@ -24,6 +24,9 @@ type ImeEnterGestureEvent = Pick<
   'key' | 'keyCode' | 'nativeEvent' | 'preventDefault' | 'shiftKey'
 > & { altKey?: boolean; ctrlKey?: boolean; metaKey?: boolean }
 
+// Hangul has no candidate step, so the Enter that commits it is the user's own Enter.
+const HANGUL_ONLY = /^\p{Script=Hangul}+$/u
+
 /**
  * Why: the confirming Enter of a CJK composition arrives as two keydowns, and the
  * two orderings differ by platform. Windows/Linux redispatch the unmarked
@@ -38,7 +41,7 @@ export function useImeEnterGestureOwnership(): {
   onKeyUp: (event: ImeEnterGestureEvent) => void
   onCompositionEnd: () => void
   reset: () => void
-  setComposing: (active: boolean) => void
+  setComposing: (active: boolean, committedText?: string) => void
 } {
   const stateRef = useRef<{ composing: boolean; pendingEnter: object | null }>({
     composing: false,
@@ -116,8 +119,11 @@ export function useImeEnterGestureOwnership(): {
         }
       },
       reset,
-      setComposing: (active: boolean) => {
+      setComposing: (active: boolean, committedText = '') => {
         stateRef.current.composing = active
+        if (!active && HANGUL_ONLY.test(committedText)) {
+          stateRef.current.pendingEnter = null
+        }
       }
     }
   }, [])

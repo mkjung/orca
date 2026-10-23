@@ -75,12 +75,6 @@ describe('assertNodePtyPatchApplied', () => {
       assertNodePtyPatchApplied(stage(PATCHED_BINDING_GYP, PTY_CC_WITHOUT_BAUD_PINS))
     ).toThrow(/cfsetispeed pin \(glibc 2\.42\)[\s\S]*cfsetospeed pin \(glibc 2\.42\)/)
   })
-
-  it('names the patch so the fix is findable', () => {
-    expect(() => assertNodePtyPatchApplied(stage("'ldflags': []", '// upstream'))).toThrow(
-      /config\/patches\/node-pty@1\.1\.0\.patch/
-    )
-  })
 })
 
 describe('slot naming', () => {

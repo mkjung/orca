@@ -1,3 +1,4 @@
+import { AgentCliInstallationError } from '../native-chat/agent-cli-installation-error'
 import { createAcpStructuredLaunchResolver } from '../runtime/structured-agent-launch-composition.test-support'
 import { describe, expect, it, vi } from 'vitest'
 import type { AgentSessionRecord } from '../../shared/agent-session-record'
@@ -44,7 +45,7 @@ function resolve(
   const spec = { ...acpLaunchSpecFor(agent)!, ...options.spec }
   const probeVersion = vi.fn<
     NonNullable<Parameters<typeof createAcpStructuredLaunchResolver>[1]['probeVersion']>
-  >(async (_input, supports) => supports(options.version ?? '1.0.46'))
+  >(async () => ({ version: options.version ?? '1.0.46' }))
   const prepareVisuals = vi.fn(async () =>
     options.visuals === false ? null : { folder: FOLDER, skill: SKILL }
   )
@@ -141,6 +142,10 @@ describe('ACP launch visuals', () => {
   })
 
   it('still refuses a release the agent does not run structured chats on', async () => {
-    await expect(resolve('omp', { version: '16.0.0' }).launch).rejects.toThrow()
+    const launch = resolve('omp', { version: '16.0.0' }).launch
+    await expect(launch).rejects.toBeInstanceOf(AgentCliInstallationError)
+    await expect(launch).rejects.toMatchObject({
+      installation: { agent: 'omp', installedVersion: '16.0.0', minimumVersion: '17.0.5' }
+    })
   })
 })

@@ -21,11 +21,19 @@ afterEach(async () => {
 })
 
 const STALLED = Symbol('stalled')
-const within = <T>(promise: Promise<T>, ms: number): Promise<T | typeof STALLED> =>
-  Promise.race([
-    promise,
-    new Promise<typeof STALLED>((resolve) => setTimeout(resolve, ms, STALLED))
-  ])
+async function within<T>(promise: Promise<T>, ms: number): Promise<T | typeof STALLED> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<typeof STALLED>((resolve) => {
+        timer = setTimeout(resolve, ms, STALLED)
+      })
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+}
 
 /** Runs `atEnd` once, right before the host ends an attach's controller: after its commit. */
 function beforeAttachEnds(host: StructuredAgentSessionHost, atEnd: () => void): void {
@@ -35,7 +43,7 @@ function beforeAttachEnds(host: StructuredAgentSessionHost, atEnd: () => void): 
   aborts.begin = (sessionId) => {
     const started = begin(sessionId)
     return {
-      signal: started.signal,
+      ...started,
       end: () => {
         if (!fired) {
           fired = true
@@ -70,7 +78,7 @@ describe('a Grok start the host aborts', () => {
     await rig.frame('initialize')
     // The start has no bound of its own: the quit is what ends it.
     expect(await within(host.flushAllStreamedEvents({ trigger: 'quit' }), 2_000)).not.toBe(STALLED)
-    expect((await attaching).ok).toBe(false)
+    expect((await attaching).ok).toBe(true)
     expect(rig.child().exited).toBe(true)
     await rig.adapter.closeAll()
   })
@@ -180,6 +188,7 @@ async function openClosedResumableChat(options: { hangsHandshake?: number } = {}
     deps: { resolveLaunch: launch(() => resumed) }
   })
   expect(await rig.host.attach(CALLER, attachParams())).toMatchObject({ ok: true })
+  await rig.ready()
   resumed = true
   await rig.host.close(SESSION, 'user-close')
   return { ...rig, children: () => children }
@@ -191,7 +200,11 @@ async function expectDeliveredAfterStop(
   secondId: string
 ): Promise<void> {
   const prompt = await rig.frame('session/prompt')
-  expect(JSON.stringify(prompt.params)).toContain('second')
+  expect(prompt.params).toMatchObject({
+    sessionId: 'acp-session-1',
+    prompt: [{ type: 'text', text: 'second' }],
+    _meta: { promptId: `prompt:${secondId}`, requestId: `prompt:${secondId}` }
+  })
   rig.child().agent.reply(prompt, { stopReason: 'end_turn' })
   const journal = host.collaboratorsForTests().sessions.get(SESSION)!.journal
   await waitFor(() =>

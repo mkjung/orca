@@ -26,7 +26,7 @@ vi.mock('@/lib/connection-owner-resolution', () => ({
   getConnectionIdForFileFromState: () => mocks.connectionIdForFile
 }))
 vi.mock('@/lib/worktree-runtime-owner', () => ({
-  runtimeEnvironmentIdWithLegacyFallbackUnlessTwin: () => mocks.worktreeRuntimeOwnerId
+  runtimeEnvironmentIdOrLocalUnlessTwin: () => mocks.worktreeRuntimeOwnerId
 }))
 vi.mock('@/lib/file-owner-runtime-target', () => {
   const getRuntimeTargetForFileOwner = (
@@ -63,26 +63,14 @@ vi.mock('@/store', () => ({
       },
       getKnownWorktreeById: () =>
         mocks.worktreePath === null ? undefined : { id: 'wt-1', path: mocks.worktreePath },
-      ...(mocks.twin
-        ? {
-            repos: [
-              { id: 'repo', executionHostId: 'local' },
-              { id: 'repo', connectionId: 'box', executionHostId: 'ssh:box' }
-            ],
-            worktreesByRepo: {
-              repo: [
-                { id: 'repo::/srv/repo', repoId: 'repo', hostId: 'local' },
-                { id: 'repo::/srv/repo', repoId: 'repo', hostId: 'ssh:box' }
-              ]
-            }
-          }
-        : {}),
+      ...(mocks.twin ? localAndSshTwinRows('repo', 'repo::/srv/repo') : {}),
       openFile: mocks.openFile
     })
   }
 }))
 
 import { openDocPreviewExternally, openDocPreviewSource } from './doc-preview-document-actions'
+import { localAndSshTwinRows } from '@/lib/workspace-twin-rows.test-fixture'
 
 const REMOTE_DOCUMENT = {
   filePath: '/root/demo/report/index.html',
