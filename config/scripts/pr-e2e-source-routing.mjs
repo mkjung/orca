@@ -133,6 +133,16 @@ export const PR_E2E_SOURCE_ROUTES = [
           file
         ))
   },
+  {
+    id: 'ssh.orcad-update-anyway',
+    specs: ['tests/e2e/ssh-orcad-update-anyway.spec.ts'],
+    matches: (file) =>
+      MANAGED_SSH_HARNESS.test(file) ||
+      (isProductSource(file) &&
+        /^src\/(?:main\/(?:ssh\/orcad-(?:update-plan|runtime-maintenance|installed-activation|remote-deploy)|managed-server\/lifecycle\/orcad-(?:managed-update-|managed-auto-update|runtime-status))|renderer\/src\/components\/settings\/(?:managed-server-|use-managed-server-lifecycle))/.test(
+          file
+        ))
+  },
   // COMPAT(legacy-relay-bridge): revisit 2027-01-15 with src/main/ssh/legacy-relay/.
   {
     id: 'ssh.orcad-legacy-relay-bridge',
@@ -285,6 +295,17 @@ export const PR_E2E_SOURCE_ROUTES = [
       MANAGED_SSH_HARNESS.test(file) ||
       (isProductSource(file) &&
         /^src\/main\/(?:persistence\/migrating-orcad-catalog\/orcad-source-(?:draft-rename|workspace-session|session-copy-resolution|export)|ssh\/orcad-migration-source-retention|ipc\/ssh\/ssh)\.ts$/.test(
+          file
+        ))
+  },
+  {
+    // A saved managed tunnel port that can no longer be bound moves to a free one (#33182).
+    id: 'ssh.orcad-unbindable-tunnel-port',
+    specs: ['tests/e2e/ssh-orcad-unbindable-tunnel-port.spec.ts'],
+    matches: (file) =>
+      MANAGED_SSH_HARNESS.test(file) ||
+      (isProductSource(file) &&
+        /^src\/(?:main\/managed-server\/lifecycle\/orcad-managed-tunnel|main\/ssh\/system-transport\/system-ssh-forward-port-reservation|shared\/runtime-environment-(?:sidecar|managed-orcad-store))/.test(
           file
         ))
   },

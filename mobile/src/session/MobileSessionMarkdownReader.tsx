@@ -81,7 +81,7 @@ export function MarkdownReader({
         ) : null}
         <View style={styles.markdownFloatingActions}>
           <Pressable
-            style={styles.markdownFloatingButton}
+            style={[styles.markdownFloatingButton, styles.markdownCopyButton]}
             onPress={onCopy}
             accessibilityRole="button"
             accessibilityLabel={
@@ -93,7 +93,7 @@ export function MarkdownReader({
             </Text>
           </Pressable>
           <Pressable
-            style={styles.markdownFloatingButton}
+            style={[styles.markdownFloatingButton, styles.markdownCopyButton]}
             onPress={onCopyPath}
             accessibilityRole="button"
             accessibilityLabel="Copy Markdown path"

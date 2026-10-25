@@ -37,7 +37,6 @@ function cleanupScriptedHost(hosted: Awaited<ReturnType<typeof openHostRig>>) {
     const scriptedPrompt = prompt
     if (scriptedPrompt) {
       const { agent } = hosted.rig.child()
-      // Only teardown's actual cancel ends this fixture's scripted prompt.
       agent.on('session/cancel', () => agent.reply(scriptedPrompt, { stopReason: 'cancelled' }))
     }
     await hosted.host.close(SESSION, 'user-close')
@@ -190,7 +189,7 @@ describe('Grok roster evidence through the existing host child store', () => {
     const f = await fixture()
     await f.spawn('first')
     await f.spawn('sibling')
-    // Each saved row keeps the raw label; the shared presentation derives the ordinal, as the strip does.
+    // Ordinals belong to presentation; persisted labels stay unchanged.
     expect(await f.roster()).toMatchObject([{ label: 'Exact label' }, { label: 'Exact label' }])
     expect((await f.strip())?.tasks).toMatchObject([
       { id: 'first', kind: 'agent', description: 'Exact label' },
@@ -222,7 +221,7 @@ describe('Grok roster evidence through the existing host child store', () => {
       })
     })
     expect(await f.targetedStop('first')).toMatchObject({ ok: true, value: { cancelled: true } })
-    // The accepted Stop settles that run until Grok's own ending says how it ended.
+    // Grok's eventual ending can revise the provisional Stop outcome.
     expect(f.childWork.views()).toMatchObject([
       { providerId: 'first', membership: 'settled', outcome: 'cancelled' },
       { providerId: 'sibling', membership: 'live' }
@@ -416,7 +415,7 @@ describe('Grok roster evidence through the existing host child store', () => {
     }
   })
 
-  // Grok's own refusal means it did nothing; a reply about another subagent proves nothing, so it is
+  // Refusal proves no cancellation; a mismatched reply leaves the outcome unknown.
   // unknown. The Stop is accepted either way, and its note says which.
   it.each([
     ['rpc-error', "The background task wasn't stopped."],

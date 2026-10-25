@@ -145,8 +145,19 @@ describe('a pane that starts its own agent launch', () => {
     })
   })
 
-  // The command was quoted for the plan's runtime, so the PTY must run that runtime's shell. The tab's
-  // shell is inferred, not asked for, and would make the planner refuse a WSL-share repo.
+  // Why: the window submits a handoff into this pane, and Enter picks Codex's "Update now" (#18153).
+  it('plans a pane whose prompt the window submits without the startup update prompt', async () => {
+    const runtime = register(vi.fn(async () => ({ id: 'pty-agent' })))
+
+    await spawnPane({ ...AI_BUTTON, suppressStartupUpdatePrompt: true })
+
+    expect(runtime.planAgentPaneLaunch).toHaveBeenCalledWith(
+      worktreeId,
+      expect.objectContaining({ startupAgent: 'claude', suppressStartupUpdatePrompt: true })
+    )
+  })
+
+  // Planned command quoting requires the planner's runtime shell; an inferred tab shell can reject WSL-share repos.
   it("runs the plan's runtime shell, not the tab's, as a host launch does", async () => {
     const providerSpawn = vi.fn(async (_options: { shellOverride?: string }) => ({
       id: 'pty-agent'

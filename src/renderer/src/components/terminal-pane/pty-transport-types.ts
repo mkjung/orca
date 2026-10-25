@@ -153,8 +153,14 @@ type PtyCallbacks = {
   onSpawnDeferred?: (reason: SpawnDeferralReason) => void
 }
 
+/** What started a pane's recovery: the server connection, or only this pane's stream. */
+export type PtyRecoveryCause = 'connection' | 'stream-stalled' | 'stream-ended'
+
 export type PtyTransportRecoveryState = {
-  reason?: 'ownership'
+  reason?: 'ownership' | 'ssh-sign-in'
+  cause?: PtyRecoveryCause
+  /** A retry is parked for an outside trigger; nothing retries on its own until then. */
+  waiting?: true
   phase:
     | 'connecting'
     | 'connected'
@@ -282,8 +288,10 @@ export type PtyTransport = {
 
 export type IpcPtyTransportOptions = {
   cwd?: string
-  /** Retain bounded user input while a visible split waits to start its PTY. */
+  /** Retain bounded user input until the pane's first PTY connection binds. */
   bufferInputUntilConnect?: boolean
+  /** Re-checked when held input would flush; false drops it (startup work appeared after the hold began). */
+  releasePreconnectInput?: () => boolean
   /** Seed a fresh transport with input handed off from a remounted deferred split. */
   preconnectInput?: readonly PtyPreconnectInputEntry[]
   /** Records newly retained input against a remount-safe deferred split handoff. */
@@ -323,6 +331,8 @@ export type IpcPtyTransportOptions = {
   retainDisposedSpawn?: () => boolean
   /** Rebind an existing pane after its provider replaces the PTY identity. */
   onPtyRebind?: (ptyId: string, replacedPtyId: string, incarnationId?: string | null) => void
+  /** The host bound a new live process to a pane this transport already ended on its exit record. */
+  onHostReboundExitedPty?: (ptyId: string) => void
   onBell?: () => void
   onAgentBecameIdle?: (title: string, meta?: AgentIdleEdgeMeta) => void
   onAgentBecameWorking?: () => void

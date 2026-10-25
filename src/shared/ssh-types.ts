@@ -89,6 +89,9 @@ export type SshTarget = {
   /** Reuse a system OpenSSH connection across setup commands. Undefined means
    *  enabled; false is an explicit per-target compatibility opt-out. */
   systemSshConnectionReuse?: boolean
+  /** Windows only: hold one loopback tunnel through a ProxyCommand/ProxyJump and run later
+   *  commands over it. Opt-in; undefined means off. */
+  systemSshProxyConnectionReuse?: boolean
   /** Relay runtime for this host; undefined means pinned-node. */
   remoteRuntime?: SshRemoteRuntime
   /** Main-owned ladder cache; renderer updates never set it. */
@@ -232,6 +235,13 @@ export type SavedPortForward = {
   remoteHost: string
   remotePort: number
   label?: string
+}
+
+/** A saved forward that isn't open on this connection; `error` is why its last start failed. */
+export type UnrestoredPortForward = SavedPortForward & {
+  error?: string
+  /** It ran, then its process died, rather than never starting. */
+  stopped?: true
 }
 
 export type SshConnectionStatus =

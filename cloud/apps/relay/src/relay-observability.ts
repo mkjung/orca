@@ -70,6 +70,8 @@ export type AssignmentUnavailableCause =
   | 'reserve-map-incomplete'
   | 'reserve-database'
   | 'reserve-paced'
+  // Intake pacing for a host re-asking off a draining cell: scheduled by the drain, like a deferral.
+  | 'reserve-paced-drained'
 
 // Row-lock waiters seen in one pg_stat_activity sample, by who waits, on which
 // table, behind whom. Roles come from each pool's application_name.
@@ -123,6 +125,12 @@ export interface RelayRuntimeObserver {
 export type HostPreAuthPath = 'beforeCheck' | 'db' | 'reserve'
 // Abandoned: the host hung up before a decision, or before the cell could act on one.
 export type HostPreAuthOutcome = 'admitted' | 'refused' | 'abandoned'
+
+// Left out of assignNonDrain503sDelta: the drain schedules these 503s.
+const DRAIN_503_CAUSES: ReadonlySet<string> = new Set<AssignmentUnavailableCause>([
+  'drain-return-deferred',
+  'reserve-paced-drained'
+])
 
 // Upper bounds in ms; the last bucket is unbounded. 450 is the step-5 t_preauth gate.
 const PRE_AUTH_BUCKET_BOUNDS_MS = [50, 100, 200, 300, 450, 700, 1_000, 2_000, 5_000] as const
@@ -202,6 +210,8 @@ type RelayMetricDeltas = {
   stickySlotStatements: number[]
   stickySlotByConnection: Map<number, StickyConnectionStatements>
   stickySlotConnectionSamplesDropped: number
+  stickyStatementMs: number[]
+  stickyStatementsObserved: number
   assign503sByCause: Record<string, number>
   dbLockWaitSamples: number
   dbLockWaitersByKey: Record<string, number>
@@ -297,6 +307,8 @@ const emptyDeltas = (): RelayMetricDeltas => ({
   stickySlotStatements: [],
   stickySlotByConnection: new Map(),
   stickySlotConnectionSamplesDropped: 0,
+  stickyStatementMs: [],
+  stickyStatementsObserved: 0,
   assign503sByCause: {},
   dbLockWaitSamples: 0,
   dbLockWaitersByKey: {},
@@ -378,6 +390,7 @@ export class RelayObservability implements RelayRuntimeObserver {
   private deltas = emptyDeltas()
   private timer: ReturnType<typeof setInterval> | null = null
   private lastFlushAt = 0
+  private instanceZone: string | undefined
   private lastFlushedSafety = {
     sqlFailures: 0,
     reconnects: 0,
@@ -388,6 +401,10 @@ export class RelayObservability implements RelayRuntimeObserver {
     private readonly identity: { role: string; cellId: string; region: RelayRegion },
     private readonly write: MetricWriter = (entry) => console.log(JSON.stringify(entry))
   ) {}
+
+  setInstanceZone(zone: string | undefined): void {
+    this.instanceZone = zone
+  }
 
   recordAuth(success: boolean): void {
     if (success) this.deltas.authSuccesses++
@@ -449,6 +466,14 @@ export class RelayObservability implements RelayRuntimeObserver {
     deltas.stickySlotSqlMs.push(sample.sqlMs)
     deltas.stickySlotStatements.push(sample.statements)
     for (const [connectionId, samplesMs] of sample.statementMsByConnection) {
+      for (const durationMs of samplesMs) {
+        keepInReservoir(
+          deltas.stickyStatementMs,
+          deltas.stickyStatementsObserved++,
+          durationMs,
+          STICKY_STATEMENT_RESERVOIR_LIMIT
+        )
+      }
       let connection = deltas.stickySlotByConnection.get(connectionId)
       if (!connection) {
         if (deltas.stickySlotByConnection.size >= STICKY_CONNECTION_LIMIT) {
@@ -671,6 +696,8 @@ export class RelayObservability implements RelayRuntimeObserver {
       role: this.identity.role,
       cellId: this.identity.cellId,
       region: this.identity.region,
+      // Which zone this instance runs in; read once at boot, absent until then or off Cloud Run.
+      ...(this.instanceZone === undefined ? {} : { instanceZone: this.instanceZone }),
       ...counts,
       forwardedBytesDelta: deltas.forwardedBytes,
       authSuccessesDelta: deltas.authSuccesses,
@@ -704,7 +731,7 @@ export class RelayObservability implements RelayRuntimeObserver {
       ...stickySlotFields(deltas),
       assign503sByCauseDelta: deltas.assign503sByCause,
       assignNonDrain503sDelta: Object.entries(deltas.assign503sByCause)
-        .filter(([cause]) => cause !== 'drain-return-deferred')
+        .filter(([cause]) => !DRAIN_503_CAUSES.has(cause))
         .reduce((sum, [, count]) => sum + count, 0),
       // Waiters summed over samples; divided by samples it is the mean number of
       // backends waiting, i.e. lock-wait seconds per second.
@@ -863,6 +890,8 @@ function stickySlotFields(deltas: RelayMetricDeltas): Record<string, unknown> {
     stickySqlMsP99: sql.p99,
     stickyStatementsP50: statements.p50,
     stickyStatementsMax: statements.max,
+    // This instance's round-trip speed over every connection; slow-speed directors are the ones that stall.
+    stickyStatementMsP50: latencySummary(deltas.stickyStatementMs).p50,
     stickySqlByConnection: byConnection,
     // One per request-connection pair that found the window's table full.
     stickySqlConnectionSamplesDroppedDelta: deltas.stickySlotConnectionSamplesDropped

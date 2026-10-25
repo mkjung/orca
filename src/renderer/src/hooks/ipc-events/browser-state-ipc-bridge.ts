@@ -2,12 +2,15 @@ import { rememberLiveBrowserUrl } from '@/components/browser-pane/describe-page/
 import { runtimeEnvironmentIdOrLocalUnlessTwin } from '@/lib/worktree-runtime-owner'
 import { openUrlInTabBesideBrowserPage } from '@/lib/browser-page-tab-opening'
 import { redactKagiSessionToken } from '../../../../shared/browser-url'
+import { LOCAL_EXECUTION_HOST_ID } from '../../../../shared/execution-host'
 import { useAppStore } from '../../store'
+import { findPage } from '../../store/slices/browser-page-records'
 import {
   acquireBrowserAutomationVisibility,
   releaseBrowserAutomationVisibility
 } from '@/components/browser-pane/host-guest/browser-automation-visibility'
 import { acquireBrowserAutomationBootstrapLease } from './browser-automation-bootstrap-lease'
+import { markBrowserPageOpenedByPage } from '@/components/browser-pane/host-guest/browser-page-window-close'
 import {
   beginAgentInputFocusGuard,
   clearAgentInputFocusGuards,
@@ -59,6 +62,21 @@ export function registerBrowserStateIpcBridge(
   )
   if (unsubscribeCertificateFailure) {
     unsubs.push(unsubscribeCertificateFailure)
+  }
+  // Why no runtime guard: only guests in this process report, and streamed pages have none here.
+  const unsubscribeAudioState = window.api.browser.onAudioStateChanged?.(
+    ({ browserPageId, audible }) => {
+      const store = useAppStore.getState()
+      store.setBrowserPageAudible(browserPageId, audible)
+      // Why: main reports each newly registered guest, and a new guest (eviction, crash) starts unmuted.
+      const tabId = findPage(store.browserPagesByWorkspace, browserPageId)?.workspaceId
+      if (tabId && store.browserAudioMutedTabIds[tabId]) {
+        void window.api.browser.setPageAudioMuted({ browserPageId, muted: true })
+      }
+    }
+  )
+  if (unsubscribeAudioState) {
+    unsubs.push(unsubscribeAudioState)
   }
   unsubs.push(
     window.api.browser.onNavigationUpdate(({ browserPageId, url, title }) => {
@@ -141,12 +159,20 @@ export function registerBrowserStateIpcBridge(
       if (!sourcePage || runtimeEnvironmentIdOrLocalUnlessTwin(store, sourcePage.worktreeId)) {
         return
       }
-      openUrlInTabBesideBrowserPage({
+      const openedPageId = openUrlInTabBesideBrowserPage({
         sourcePageId: browserPageId,
         worktreeId: sourcePage.worktreeId,
         url,
         activate: activate ?? true
       })
+      if (openedPageId) {
+        markBrowserPageOpenedByPage(openedPageId)
+      }
+    })
+  )
+  unsubs.push(
+    window.api.browser.onSessionProfilesChanged(() => {
+      void useAppStore.getState().fetchBrowserSessionProfiles(LOCAL_EXECUTION_HOST_ID)
     })
   )
 }

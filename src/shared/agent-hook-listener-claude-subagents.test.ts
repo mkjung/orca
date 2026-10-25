@@ -221,6 +221,35 @@ describe('shared agent-hook-listener', () => {
       expect(stopped?.payload.state).toBe('done')
     })
 
+    it('does not mint rows for agent-hook runs on the lead or inside a subagent', () => {
+      claudeEvent({ hook_event_name: 'UserPromptSubmit', prompt: 'go' })
+      // Why: payloads captured from Claude Code 2.1.310; a hook run inside a subagent inherits its agent_type.
+      const leadHook = claudeEvent({
+        hook_event_name: 'PreToolUse',
+        agent_id: 'hook-agent-f91f48da-b4db-45e3-a8a1-3debdaa4f2f5',
+        tool_name: 'Read',
+        tool_input: { file_path: '/tmp/README.md' }
+      })
+      expect(leadHook?.payload.state).toBe('working')
+      expect(leadHook?.payload.subagents ?? []).toEqual([])
+
+      claudeEvent({
+        hook_event_name: 'SubagentStart',
+        agent_id: 'aa34e9e23451d1f6b',
+        agent_type: 'general-purpose'
+      })
+      const childHook = claudeEvent({
+        hook_event_name: 'PreToolUse',
+        agent_id: 'hook-agent-5179ea04-58c0-440a-b861-04ead9f87aaa',
+        agent_type: 'general-purpose',
+        tool_name: 'Read',
+        tool_input: { file_path: '/tmp/README.md' }
+      })
+      expect(childHook?.payload.subagents).toEqual([
+        expect.objectContaining({ id: 'aa34e9e23451d1f6b' })
+      ])
+    })
+
     it('parks a teammate as a persistent idle row across its stop/idle/lead-Stop cycle', () => {
       // Why: the interactive agent-teams shape observed live on 2.1.217 —
       // lifecycle events use `a<name>-<hex>` agent ids while background_tasks
@@ -598,10 +627,7 @@ describe('shared agent-hook-listener', () => {
     })
 
     it('does not resurrect persisted idle child rows after a restart', () => {
-      // Why: the roster tracks only working children now. A persisted idle
-      // snapshot (from a build that kept idle rows) is a finished child, so
-      // hydration must drop it — otherwise restart would re-pile the exact
-      // squatting rows this fix removes.
+      // Idle snapshots have no live confirmation after restart.
       seedClaudeSubagentRosterFromSnapshots(state, PANE_KEY, [
         {
           id: 'aprobe2-6d3cb5b52120b7bf',
@@ -610,7 +636,8 @@ describe('shared agent-hook-listener', () => {
           agentType: 'security-reviewer'
         }
       ])
-      claudeEvent({ hook_event_name: 'UserPromptSubmit', prompt: 'after restart' })
+      const resumed = claudeEvent({ hook_event_name: 'UserPromptSubmit', prompt: 'after restart' })
+      expect(resumed?.payload.subagents).toBeUndefined()
       const stop = claudeEvent({
         hook_event_name: 'Stop',
         background_tasks: [

@@ -32,7 +32,7 @@ async function commit(
   const runtime = {
     terminalRunFacts: facts,
     intentionalPtyStops,
-    // Why the real method: the case under test is what the runtime does with each commit.
+    // Exercise real runtime commit handling through the fixture ports.
     noteTerminalSpawnCommit: OrcaRuntimeWithRuntimeId.prototype.noteTerminalSpawnCommit,
     registerPreAllocatedHandleForPty: vi.fn(),
     registerPty: vi.fn(),
@@ -74,6 +74,19 @@ describe('runtime spawn commit: run facts', () => {
     const coldRestore = { scrollback: 'prior output', cwd: '/tmp' }
 
     expect((await commit({ coldRestore })).freshSpawn).toBe(false)
+  })
+
+  // STA-12043: a hook the new process sends while the commit persists must not read as older.
+  it('dates a new process by its spawn request, not its commit', async () => {
+    const facts = new TerminalRunFactsRegister()
+    let requestedAt = 0
+    await commit({}, facts, undefined, (ctx) => {
+      requestedAt = ctx.spawnRequestedAt
+      vi.spyOn(Date, 'now').mockReturnValue(requestedAt + 5_000)
+    })
+    vi.restoreAllMocks()
+
+    expect(facts.readProcessStartedAt(PTY_ID, INCARNATION_ID)).toBe(requestedAt)
   })
 
   it('keeps a process run facts when the same incarnation commits again', async () => {

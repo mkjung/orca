@@ -208,7 +208,8 @@ export abstract class OrcaRuntimeWithStopRequestedPtyIds extends OrcaRuntimeWith
     getExplicitStatus: (handle) => this.getFreshExplicitAgentStatusForHandle(handle),
     getLifecycleStatus: (ptyId) => this.agentPromptLifecycleByPtyId.get(ptyId),
     isRunning: (handle) => this.isTerminalRunningAgent(handle),
-    getTitleDisplayClear: (ptyId) => this.getPtyTitleDisplayClear(ptyId)
+    getTitleDisplayClear: (ptyId) => this.getPtyTitleDisplayClear(ptyId),
+    flushPendingBlockedStamp: (ptyId) => this.flushPendingWaitBlockedCheck(ptyId)
   })
 
   protected _orchestrationDb: OrchestrationDb | null = null
@@ -244,8 +245,8 @@ export abstract class OrcaRuntimeWithStopRequestedPtyIds extends OrcaRuntimeWith
     getLeafKey: (tabId, leafId) => this.getLeafKey(tabId, leafId),
     getLiveLeafForHandle: (handle) => this.getLiveLeafForHandle(handle).leaf,
     isAgentSettledForDelivery: (leaf) => this.checkDeliverySettledAndArmRecheck(leaf),
+    isPtyAwaitingUserInput: (ptyId) => this.isPtyAwaitingUserInput(ptyId),
     getMessageWaiters: (mailboxHandle) => this.messageWaiters.get(mailboxHandle),
-    getTabTitle: (tabId) => this.tabs.get(tabId)?.title,
     getCliCommand: (terminalHandle) => this.getTerminalOrchestrationCliCommand(terminalHandle),
     getTerminalHandleForLeafKey: (leafKey) => this.handleByLeafKey.get(leafKey),
     resolveSubmitTarget: (leaf, ptyId) => this.resolveOrchestrationPointerSubmitTarget(leaf, ptyId),

@@ -21,7 +21,6 @@ afterEach(async () => {
   await closeProviderTimelineRigs()
 })
 
-/** What Grok says about one subagent, translated as the adapter would. */
 function subagent(lane: AcpStructuredLane, state: 'working' | 'completed'): AcpTimelineEvent[] {
   const update =
     state === 'working'

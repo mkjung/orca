@@ -105,7 +105,7 @@ export function createTerminalLinkTestDoubles(): TerminalLinkTestDoubles {
     setPendingEditorReveal: setPendingEditorRevealMock,
     setMarkdownViewMode: setMarkdownViewModeMock,
     activeFileIdByWorktree: {} as Record<string, string | null>,
-    openFiles: [] as { filePath: string; worktreeId: string }[],
+    openFiles: [],
     unifiedTabsByWorktree: {},
     groupsByWorktree: {},
     worktreesByRepo: {},

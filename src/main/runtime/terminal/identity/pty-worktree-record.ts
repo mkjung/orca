@@ -47,6 +47,7 @@ export abstract class OrcaRuntimeWithRecordPtyWorktree extends RuntimeWorkspaceR
 
   protected abstract invalidatePtyIncarnationHandle(ptyId: string): void
 
+  /** Date changed inventory titles once so reconciliation cannot masquerade as new shell evidence. */
   protected recordPtyWorktree(
     ptyId: string,
     worktreeId: string,
@@ -113,6 +114,7 @@ export abstract class OrcaRuntimeWithRecordPtyWorktree extends RuntimeWorkspaceR
         launchToken: null,
         launchIncarnationId: null,
         launchAgent: null,
+        launchCommandAgent: null,
         agentSessionOwners: (state.agentSessionOwners ?? []).map(cloneAgentSessionOwnerBinding),
         foregroundAgent: null,
         connected: state.connected ?? true,
@@ -131,6 +133,7 @@ export abstract class OrcaRuntimeWithRecordPtyWorktree extends RuntimeWorkspaceR
         controllerTitle: null,
         title: state.title ?? null,
         titleUpdatedAt: titleObservedAt,
+        titleObservedAtEpochMs: titleObservedAt !== null ? Date.now() : null,
         lastOutputAt: state.lastOutputAt ?? null,
         tailBuffer: [],
         tailTranscriptBuffer: [],
@@ -182,6 +185,7 @@ export abstract class OrcaRuntimeWithRecordPtyWorktree extends RuntimeWorkspaceR
     if (state.incarnationId !== undefined) {
       if (pty.incarnationId && state.incarnationId && pty.incarnationId !== state.incarnationId) {
         this.invalidatePtyIncarnationHandle(ptyId)
+        this.retirePredecessorPtyExitEvidence(pty)
       }
       pty.incarnationId = state.incarnationId
     }
@@ -231,10 +235,16 @@ export abstract class OrcaRuntimeWithRecordPtyWorktree extends RuntimeWorkspaceR
     if (state.preview !== undefined && state.preview.length > 0) {
       pty.preview = state.preview
     }
-    if (state.title !== undefined && state.title !== null && state.title.length > 0) {
+    if (
+      state.title !== undefined &&
+      state.title !== null &&
+      state.title.length > 0 &&
+      state.title !== pty.title
+    ) {
       const observedAt = this.nextTitleObservationSequence()
       pty.title = state.title
       pty.titleUpdatedAt = observedAt
+      pty.titleObservedAtEpochMs = Date.now()
       this.setPtyManagementTitleFromObservedTitle(pty, state.title, observedAt)
     }
     // Why: recordPtyWorktree is the common lifecycle point for every path that resolves a PTY's worktree (renderer restore, controller list).

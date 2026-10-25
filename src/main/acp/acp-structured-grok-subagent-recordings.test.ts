@@ -1,7 +1,3 @@
-// The adapter against Grok's recorded subagents (Grok 1.0.46): each recording plays back as the
-// agent, and the assertions read what it reports to the host about each subagent and the reply
-// rows a client would see.
-
 import { afterEach, describe, expect, it } from 'vitest'
 import type { AgentJournalMessageItem } from '../../shared/agent-session-journal-types'
 import { readAgentJournalTurn } from '../../shared/agent-session-turn-record'
@@ -46,7 +42,6 @@ function send(rig: AcpAdapterRig, clientMessageId: string) {
 
 type Reported = { id: string; label?: string; outcome?: string; tokens?: number }
 
-/** Each subagent as the adapter last reported it to the host. */
 function subagents(evidence: readonly AgentChildWorkEvidence[]): Reported[] {
   const reported = new Map<string, Reported>()
   for (const edge of evidence) {

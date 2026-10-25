@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { makeDeferred } from './pty-ipc-test-constants'
 import { setupPtyIpcSuite } from './pty-ipc-test-harness'
-import { isHiddenRendererPty } from './pty-hidden-delivery-gate'
+import { isHiddenRendererPty } from './pty/delivery/pty-hidden-delivery-gate'
 import { OrcaRuntimeService } from '../runtime/orca-runtime'
 import { registerPtyHandlers } from './pty/register-handlers'
 import { attachViewAfterHiddenStart } from './pty/pane/attach-only-view'
@@ -161,7 +161,6 @@ describe('runtime-controller spawn: hidden until a renderer view mounts', () => 
     daemon.setPtyBackgrounded.mockClear()
     simulateRendererReload()
 
-    // A reload must not resurrect a runtime mark on a PTY a renderer view already owned.
     expect(isHiddenRendererPty(result.id)).toBe(false)
     expect(daemon.setPtyBackgrounded).not.toHaveBeenCalledWith(result.id, true)
   })
@@ -180,7 +179,6 @@ describe('runtime-controller spawn: hidden until a renderer view mounts', () => 
 
     const spawnPromise = controller.spawn({ cols: 80, rows: 24, initiallyHidden: true })
     await vi.waitFor(() => expect(mintedSessionId).toBeDefined())
-    // The visible mount reports visible and releases the pre-spawn mark.
     getPtySetRendererPtyVisibleListener()(null, { id: mintedSessionId!, visible: true })
     getPtySetHiddenRendererPtyListener()(null, { id: mintedSessionId!, hidden: false })
     spawnGate.resolve()

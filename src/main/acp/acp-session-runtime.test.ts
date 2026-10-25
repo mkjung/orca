@@ -315,7 +315,7 @@ describe('ACP session runtime', () => {
     expect(diagnostics).toContain(
       'Answered ACP permission request cancelled: handler selected an unavailable option'
     )
-    // The session stays usable: a local permission failure is not a protocol failure.
+    // A local permission failure must leave the session usable.
     await expect(runtime.prompt([...textPrompt])).rejects.toThrow('already in progress')
   })
 

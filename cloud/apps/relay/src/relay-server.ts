@@ -52,6 +52,7 @@ import { CellReserveClient } from './cell-reserve-client.js'
 import { googleMetadataIdentityToken, reusedIdentityToken } from './google-metadata-identity-token.js'
 import { ReserveAssignment } from './reserve-assignment.js'
 import { ReservePlacer } from './reserve-placement.js'
+import { ReserveRehome, ReserveRehomeSwitch } from './reserve-rehome.js'
 import {
   reconcileReserveLedger,
   RESERVE_LEDGER_RECONCILE_MS,
@@ -200,6 +201,13 @@ export function createRelayServer(
     config.role === 'director' && shadowSeatPoller && config.reservePlacement === 'on'
       ? new ReserveLedgerWriter(observedDatabase, { now: options.now })
       : undefined
+  // Step 1 C: the operator's rehome switch is read only on a director with C switched on.
+  const rehomePercent = config.reserveRehomePercent ?? 0
+  const rehomeSwitch =
+    config.role === 'director' && shadowSeatPoller && rehomeAudience && config.reservePlacement === 'on' && rehomePercent > 0
+      ? new ReserveRehomeSwitch(async () => await assignments.regionRehomeSwitch(), options.now)
+      : undefined
+  rehomeSwitch?.start()
   const reservePlacement =
     config.role === 'director' &&
     shadowSeatPoller &&
@@ -220,6 +228,14 @@ export function createRelayServer(
           }),
           readRow: async (identity) => await assignments.hostWhereabouts(identity),
           databaseBusy: () => readRelayDatabasePoolPressure(database).databasePoolWaiting > 0,
+          ...(rehomeSwitch
+            ? {
+                rehome: new ReserveRehome({
+                  percent: rehomePercent,
+                  switchOpen: (now) => rehomeSwitch.isOpen(now)
+                })
+              }
+            : {}),
           now: options.now,
           random: options.random
         })
@@ -394,6 +410,8 @@ export function createRelayServer(
       ? new CellAdmitEffectiveWriter({
           write: async (mode) =>
             await assignments.recordCellAdmitEffective({ cellId: config.cellId, cellIncarnation, mode }),
+          claimTrip: async (slots) =>
+            await assignments.claimDeadManTripSlot({ cellId: config.cellId, cellIncarnation, slots }),
           databaseBusy: () => readRelayDatabasePoolPressure(database).databasePoolWaiting > 0,
           now: options.now ?? Date.now
         })
@@ -408,7 +426,12 @@ export function createRelayServer(
         }
         appliedAdmitMode = admitMode
         // A booted cell runs db defaults until its first flag read, so it writes nothing until then.
-        admitEffective?.tick(admitMode, options.cellFlags?.().flags.admitMode === 'reserve')
+        const held = reserveDeadMan?.pendingTrip()
+        admitEffective?.tick(
+          admitMode,
+          options.cellFlags?.().flags.admitMode === 'reserve',
+          held ? { slots: held.slots, permit: () => reserveDeadMan?.permit(held.generation) } : null
+        )
       }, RESERVE_MODE_WATCH_MS)
     : null
   reserveSweepTimer?.unref()
@@ -875,6 +898,7 @@ export function createRelayServer(
     clients.close()
     dataSockets.close()
     store.resumeAudit.stop()
+    rehomeSwitch?.stop()
   })
   const resumeAuditDropped = (): number => {
     const drops = store.resumeAudit.drops()

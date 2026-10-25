@@ -26,6 +26,7 @@ export type PtyIpcSpawnState = {
   spawnTiming: PtySpawnTiming
   codexHomeLaunchStartedAt: Date | undefined
   codexHomeLaunchStartedSequence: number | undefined
+  spawnRequestedAt: number
   reattachedCodexHomeRoutes: Map<string, CodexPaneHomeRoute | null>
   cwd: string | undefined
   prevalidatedCwd: string | undefined
@@ -51,9 +52,7 @@ export type PtyIpcSpawnState = {
   releaseWorktreeSpawn: (() => void) | undefined
   provider: IPtyProvider
   preAdoptedStablePane: AdoptStablePaneResult | null
-  /** The agent launch this pane's spawn admitted, until the spawn ends it. */
   paneAgentLaunch: PaneAgentLaunch | null
-  /** The new process exited before it registered; the pane drains it. */
   exitedBeforeRegistration: boolean
   isClaudeLaunch: boolean
   claudeAuth: ClaudeRuntimeAuthPreparation | null
@@ -112,6 +111,7 @@ export function createPtyIpcSpawnState(
     spawnTiming: createPtySpawnTiming(),
     codexHomeLaunchStartedAt: undefined,
     codexHomeLaunchStartedSequence: undefined,
+    spawnRequestedAt: Date.now(),
     reattachedCodexHomeRoutes: new Map(),
     cwd: undefined,
     prevalidatedCwd: undefined,

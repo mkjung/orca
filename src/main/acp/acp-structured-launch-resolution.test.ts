@@ -41,7 +41,6 @@ function grokRecord(overrides: Partial<AgentSessionRecord> = {}): AgentSessionRe
   }
 }
 
-/** A journal holding one turn of each named provider session. */
 function journalWithTurns(...providerSessions: string[]): JournalLoad {
   const state = createJournalReducerState(identity.sessionId, 'epoch-1')
   providerSessions.forEach((providerSession, index) => {
@@ -209,7 +208,6 @@ describe('ACP launch resolution', () => {
       nativeId: 'acp-1'
     })
     const replaced = grokRecord({ providerHandleChain: [link('acp-1'), link('acp-2', 'acp-1')] })
-    /** A journal holding the row for `lostKey`, written while `providerSession` ran. */
     const withRow = (providerSession: string): JournalLoad => {
       const load = journalWithTurns()
       const itemId = agentJournalItemKey(
@@ -236,7 +234,6 @@ describe('ACP launch resolution', () => {
       (await resolver(record, readJournal).resolve({ identity })).resume?.unannouncedLosses()
 
     const reads: string[] = []
-    // A chain that lost nothing never reads the journal.
     expect(
       await losses(grokRecord({ providerHandleChain: [link('acp-1')] }), () => {
         reads.push('read')

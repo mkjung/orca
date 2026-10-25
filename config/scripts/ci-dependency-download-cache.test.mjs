@@ -395,7 +395,10 @@ describe('CI dependency download caches', () => {
     const warmInstall = warm.steps.find((step) => step.uses === installer)
     const unitInstall = units.steps.find((step) => step.uses === installer)
     expect(warm['runs-on']).toBe('${{ matrix.runner }}')
-    expect(warm.strategy.matrix.runner).toEqual(['ubuntu-24.04-arm', pr.jobs.test.with.runner])
+    expect(warm.strategy.matrix.runner).toEqual([
+      'blacksmith-4vcpu-ubuntu-2404-arm',
+      pr.jobs.test.with.runner
+    ])
     expect(pr.jobs.preflight['runs-on']).toBe('blacksmith-8vcpu-ubuntu-2404')
     expect(pr.jobs.test.with.runner).toBe('blacksmith-8vcpu-ubuntu-2404')
     expect(units['runs-on']).toBe('${{ inputs.runner }}')

@@ -1,3 +1,5 @@
+import type { AgentJournalTurnScope } from './agent-session-journal-turn-scope'
+export type { AgentJournalTurnScope } from './agent-session-journal-turn-scope'
 import type { AgentSessionProviderContextBoundary } from './agent-session-provider-context'
 // ─── Canonical agent-session journal: cross-process wire shapes ─────────────
 // The host-owned timeline for a structured agent session. Everything here must
@@ -18,7 +20,7 @@ import type { NativeChatToolMetadata } from './native-chat-tool-identity'
 import type { AgentSessionContextUsage } from './agent-session-context-usage'
 import type { AgentSessionProviderHandle } from './agent-session-provider-handle'
 import type { NativeChatBlock, NativeChatRole } from './native-chat-types'
-import type { AgentMessageSource } from './agent-session-message-source'
+import type { AgentMessageSource } from './agent-session/agent-session-message-source'
 import type { AgentSessionExecutionOptions } from './agent-session-execution-options'
 
 export { type AgentType }
@@ -413,11 +415,6 @@ export type AgentJournalProducerLinkage = {
    *  this answers "which run of it", and is deliberately not part of the identity. */
   attempt?: number
 }
-
-/** Which turn a row belongs to, stated by the write that created it. `turn` names the turn
- *  record's journal key; `thread` is a row that belongs to no turn — a notice about the
- *  conversation, or a message not yet delivered into one. Turn records themselves are `thread`. */
-export type AgentJournalTurnScope = { kind: 'turn'; turnItemId: string } | { kind: 'thread' }
 
 export const AGENT_JOURNAL_THREAD_SCOPE: AgentJournalTurnScope = { kind: 'thread' }
 

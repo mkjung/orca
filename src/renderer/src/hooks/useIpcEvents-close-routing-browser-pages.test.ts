@@ -66,6 +66,7 @@ describe('useIpcEvents browser tab close routing', () => {
           setSshConnectionState: vi.fn(),
           setSshTargetLabels: vi.fn(),
           setPortForwards: vi.fn(),
+          setUnrestoredPortForwards: vi.fn(),
           clearPortForwards: vi.fn(),
           setDetectedPorts: vi.fn(),
           enqueueSshCredentialRequest: vi.fn(),
@@ -200,6 +201,7 @@ describe('useIpcEvents browser tab close routing', () => {
         browser: {
           onGuestLoadFailed: () => () => {},
           onOpenLinkInOrcaTab: () => () => {},
+          onSessionProfilesChanged: () => () => {},
           onNavigationUpdate: () => () => {},
           onActivateView: () => () => {},
           onPaneFocus: () => () => {}
@@ -211,6 +213,7 @@ describe('useIpcEvents browser tab close routing', () => {
         ssh: {
           listTargets: () => Promise.resolve([]),
           listPortForwards: () => Promise.resolve([]),
+          listUnrestoredPortForwards: () => Promise.resolve([]),
           listDetectedPorts: () => Promise.resolve([]),
           getState: () => Promise.resolve(null),
           onStateChanged: () => () => {},
@@ -295,6 +298,7 @@ describe('useIpcEvents browser tab close routing', () => {
           setSshConnectionState: vi.fn(),
           setSshTargetLabels: vi.fn(),
           setPortForwards: vi.fn(),
+          setUnrestoredPortForwards: vi.fn(),
           clearPortForwards: vi.fn(),
           setDetectedPorts: vi.fn(),
           enqueueSshCredentialRequest: vi.fn(),
@@ -430,6 +434,7 @@ describe('useIpcEvents browser tab close routing', () => {
         browser: {
           onGuestLoadFailed: () => () => {},
           onOpenLinkInOrcaTab: () => () => {},
+          onSessionProfilesChanged: () => () => {},
           onNavigationUpdate: () => () => {},
           onActivateView: () => () => {},
           onPaneFocus: () => () => {}
@@ -441,6 +446,7 @@ describe('useIpcEvents browser tab close routing', () => {
         ssh: {
           listTargets: () => Promise.resolve([]),
           listPortForwards: () => Promise.resolve([]),
+          listUnrestoredPortForwards: () => Promise.resolve([]),
           listDetectedPorts: () => Promise.resolve([]),
           getState: () => Promise.resolve(null),
           onStateChanged: () => () => {},
@@ -523,6 +529,7 @@ describe('useIpcEvents browser tab close routing', () => {
           setSshConnectionState: vi.fn(),
           setSshTargetLabels: vi.fn(),
           setPortForwards: vi.fn(),
+          setUnrestoredPortForwards: vi.fn(),
           clearPortForwards: vi.fn(),
           setDetectedPorts: vi.fn(),
           enqueueSshCredentialRequest: vi.fn(),
@@ -655,6 +662,7 @@ describe('useIpcEvents browser tab close routing', () => {
         browser: {
           onGuestLoadFailed: () => () => {},
           onOpenLinkInOrcaTab: () => () => {},
+          onSessionProfilesChanged: () => () => {},
           onNavigationUpdate: () => () => {},
           onActivateView: () => () => {},
           onPaneFocus: () => () => {}
@@ -666,6 +674,7 @@ describe('useIpcEvents browser tab close routing', () => {
         ssh: {
           listTargets: () => Promise.resolve([]),
           listPortForwards: () => Promise.resolve([]),
+          listUnrestoredPortForwards: () => Promise.resolve([]),
           listDetectedPorts: () => Promise.resolve([]),
           getState: () => Promise.resolve(null),
           onStateChanged: () => () => {},

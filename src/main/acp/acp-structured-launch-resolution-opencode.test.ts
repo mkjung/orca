@@ -253,7 +253,6 @@ describe('OpenCode ACP launch resolution', () => {
   })
 })
 
-// Since OpenCode 2.0.0 `opencode2` is an alias the 2.x installer writes beside `opencode`.
 describe('OpenCode 2 ACP launch resolution', () => {
   const OPENCODE2 = {
     ...acpLaunchSpecFor('opencode2')!,
@@ -277,7 +276,6 @@ describe('OpenCode 2 ACP launch resolution', () => {
     })
   })
 
-  // 1.x and 2.x below 2.0.14 never ran the private child this row needs.
   it.each(['1.18.35', '2.0.13', '2.0.14-rc.1'])('refuses %s as too old', async (version) => {
     await expect(launchOn(version)).rejects.toMatchObject({
       installation: { agent: 'opencode2', installedVersion: version, minimumVersion: '2.0.14' }

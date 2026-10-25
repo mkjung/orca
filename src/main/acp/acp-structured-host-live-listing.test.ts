@@ -7,8 +7,6 @@ import {
 import type { AgentSessionRecordStore } from '../runtime/agent-session-record-store'
 import { CALLER } from '../native-chat/agent-session-wire/structured-agent-session-host-test-harness'
 import { GROK_CONFIG_OPTIONS, PROVIDER_SESSION } from './acp-structured-adapter.test-support'
-// A running Grok chat's own model list, read through the real host, reaches the account's saved
-// catalog: the next chat opens warm even when a session-free listing failed.
 
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import { closeProviderTimelineRigs } from '../native-chat/agent-session-timeline/provider-timeline-assembler-test-support'
@@ -97,11 +95,9 @@ describe('a live Grok listing', () => {
       stop: vi.fn(),
       providerStarted: vi.fn()
     }
-    // The rig waits for the child to turn ready: bookkeeping never fails a proven start.
     const { host, rig, store, fence } = await openAttachedHostRig({}, undefined, modelCatalog)
     expect(modelCatalog.recordLiveListing).toHaveBeenCalledTimes(1)
     expect(store.getRecord(SESSION)?.lease.ownerProcess).toEqual(expect.any(Object))
-    // The rest of the start still lands, and live options remain readable.
     await expect(host.readOptions(SESSION)).resolves.toMatchObject({ current: expect.any(Object) })
     expect(modelCatalog.recordLiveListing).toHaveBeenCalledTimes(2)
     expect(

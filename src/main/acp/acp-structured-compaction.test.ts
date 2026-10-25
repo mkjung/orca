@@ -27,7 +27,6 @@ afterEach(async () => {
 const OPENCODE = acpLaunchSpecFor('opencode')!
 const OMP = acpLaunchSpecFor('omp')!
 
-/** The command turn the host writes before it hands `/compact` over. */
 async function commandRun(rig: AcpAdapterRig): Promise<StructuredAgentSessionCommandRun> {
   const turn = structuredAgentSessionCommandTurn('compact-1')
   const running = agentJournalTurnBody({ turnId: turn.turnId, state: 'running', startedAt: 4_000 })
@@ -38,7 +37,6 @@ async function commandRun(rig: AcpAdapterRig): Promise<StructuredAgentSessionCom
   return { clientMessageId: 'compact-1', ...turn, running }
 }
 
-/** Starts the agent, sends `/compact`, and returns its prompt frame. */
 async function compact(spec: AcpLaunchSpec, frames?: AcpFixtureFrame[]) {
   const rig = await openAcpAdapterRig({ spec })
   new StructuredAgentRegistry([
@@ -64,7 +62,6 @@ function replyText(text: string, promptId?: string) {
   }
 }
 
-/** The command's turn once the agent's answer ended it, and the rows inside it. */
 async function ended(rig: AcpAdapterRig, command: StructuredAgentSessionCommandRun) {
   return waitFor(async () => {
     const rows = await rig.rig.rows()

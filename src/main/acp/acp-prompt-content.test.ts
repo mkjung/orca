@@ -135,7 +135,7 @@ describe('ACP prompt content', () => {
   })
 
   it('keeps a message with images within one protocol line', async () => {
-    // The images fit their raw limit, but with this much text the prompt would pass the line.
+    // Raw images fit, but their encoded payload plus text exceeds the protocol line limit.
     const text = 'x'.repeat(8 * 1024 * 1024)
     const image = {
       type: 'image-ref' as const,

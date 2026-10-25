@@ -39,7 +39,7 @@ async function fixture() {
   const hosted = await openAttachedHostRig({}, childWork.sink)
   cleanup.push(async () => {
     const agent = hosted.rig.child().agent
-    // Only cleanup answers cancellation; task-stop assertions run before this.
+    // Only teardown cancellation ends the prompt; Stop assertions run first.
     agent.on('session/cancel', () => {
       const prompt = agent.frames.findLast((frame) => frame.method === 'session/prompt')
       if (prompt) {
@@ -53,7 +53,6 @@ async function fixture() {
   const agent = hosted.rig.child().agent
   agent.notify('session/update', replyChunk(promptIdOf(prompt), 'Starting it'))
   await hosted.rows()
-  // As the recorded s6-background Grok run sends them.
   const background = async (taskId = TASK, extra: Record<string, unknown> = {}) => {
     agent.notify('_x.ai/task_backgrounded', {
       sessionId: PROVIDER_SESSION,
@@ -183,7 +182,7 @@ describe('Grok background commands in the background-tasks strip', () => {
     expect(f.kills().at(-1)?.params).toEqual({ sessionId: PROVIDER_SESSION, taskId: TASK })
     expect(f.agent.frames.filter((frame) => frame.method === 'session/cancel')).toEqual([])
     expect(f.rig.child().closed).toBe(false)
-    // Held until Grok's own ending arrives, so the strip keeps the row in its stopping state.
+    // Keep the row stopping until Grok reports its ending.
     expect((await f.strip())?.tasks?.map((task) => task.id)).toEqual([
       CHILD,
       'acp-task:sibling-task'
@@ -225,7 +224,6 @@ describe('Grok background commands in the background-tasks strip', () => {
     expect(await f.strip()).toBeNull()
   })
 
-  // As for Codex and Claude: running background work must be stopped before the chat is cleared.
   it('refuses /clear while a background command runs', async () => {
     const f = await fixture()
     await f.background()
@@ -247,8 +245,7 @@ describe('Grok background commands in the background-tasks strip', () => {
     })
   })
 
-  // Grok's own refusal means it killed nothing; a reply about another task proves nothing. The Stop
-  // is accepted either way, and its note says which.
+  // Refusal proves no kill; a mismatched task reply leaves cancellation unknown.
   it.each([
     ['rpc-error', "The background task wasn't stopped."],
     ['envelope-error', "The background task wasn't stopped."],
@@ -303,7 +300,6 @@ describe('Grok kill route check', () => {
       expect(frame.params).toEqual({})
       agent.fail(frame, -32601, 'Method not found')
     })
-    // The session still offers Stop for its subagents, whose route answered.
     expect(rig.adapter.backgroundTaskStops(ADAPTER_SESSION)?.supportsTaskStop).toBe(true)
     expect(evidence).toMatchObject([
       { type: 'live', child: { handle: { id: CHILD }, kind: 'command', stoppable: false } }

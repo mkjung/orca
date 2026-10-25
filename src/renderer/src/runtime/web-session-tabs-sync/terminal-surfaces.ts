@@ -4,7 +4,7 @@ import type {
   RuntimeMobileSessionAgentTab
 } from '../../../../shared/runtime-types'
 import type { TerminalLayoutSnapshot, TerminalTab } from '../../../../shared/terminal-tab-types'
-import { defaultAgentChatLabel } from '../../../../shared/agent-session-chat-label'
+import { defaultAgentChatLabel } from '../../../../shared/agent-session/agent-session-chat-label'
 import { sanitizeTerminalLayoutPaneTitlesForLabels } from '../../../../shared/terminal-pane-title-sanitization'
 import { resolveTerminalLayoutRoot } from '../remote-terminal-layout-resolution'
 import { retainLocalScrollbackInRemoteLayout } from '@/components/terminal-pane/remote-layout-scrollback-retention'
@@ -26,6 +26,10 @@ import type { ExecutionHostId } from '../../../../shared/execution-host'
 import { structuredAgentSessionTabId } from '../../../../shared/structured-agent-session-projection'
 import { hasStructuredAgentSessionLaunchCancellationTombstone } from '@/lib/structured-agent-session-launch-registry'
 import { withPendingPaneTitleRenames } from '../pending-pane-title-renames'
+import {
+  isMirroredTerminalOfAnotherEnvironment,
+  type MirrorRowOwnershipState
+} from './mirror-row-ownership'
 
 export function isReadyTerminalTab(
   tab: RuntimeMobileSessionTabsResult['tabs'][number]
@@ -240,6 +244,7 @@ export function chooseRemoteTerminalLayout(
 }
 
 export function shouldReplaceTerminalTab(
+  state: MirrorRowOwnershipState,
   tab: TerminalTab,
   environmentId: string,
   nextRemotePtyIds: ReadonlySet<string>,
@@ -253,8 +258,11 @@ export function shouldReplaceTerminalTab(
     return true
   }
   if (isMirroredTerminalSurfaceId(tab.id)) {
-    // Why: host snapshots are authoritative for mirrored tabs; replace old mirrors even when the next surface still awaits a stream handle, else parity drifts.
-    return true
+    // Why: host snapshots are authoritative for their own mirrored tabs; replace them even when the next surface still awaits a stream handle, else parity drifts.
+    return (
+      nextMirroredTerminalIds.has(tab.id) ||
+      !isMirroredTerminalOfAnotherEnvironment(state, tab, environmentId)
+    )
   }
   if (tab.pendingActivationSpawn && tab.ptyId === null && nextRemotePtyIds.size > 0) {
     // Why: a fresh placeholder has no identity, so the host's first terminal takes it over. A

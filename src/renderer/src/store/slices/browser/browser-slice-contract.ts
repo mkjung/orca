@@ -106,6 +106,11 @@ export type RemoteBrowserPageHandle = {
   restoredClientHosted?: true
 }
 
+export type RemovedBrowserHistory = {
+  browserUrlHistory: BrowserHistoryEntry[]
+  workspaceDocHistory: WorkspaceDocHistoryEntry[]
+}
+
 export type BrowserCookieImportExecutionResult = BrowserCookieImportResult & {
   executionHostId: ExecutionHostId
   executionHostLabel: string
@@ -118,6 +123,10 @@ export type BrowserSlice = {
   browserTabsByWorktree: Record<string, BrowserWorkspace[]>
   browserPagesByWorkspace: Record<string, BrowserPage[]>
   browserCertificateFailuresByPageId: Record<string, BrowserCertificateFailure>
+  /** May precede the page record (client-hosted pages); main's false on guest teardown clears it. */
+  browserAudiblePageIds: Record<string, true>
+  /** Tab mute lives for the tab's life; each new guest of its pages is muted again. */
+  browserAudioMutedTabIds: Record<string, true>
   browserAnnotationsByPageId: Record<string, BrowserPageAnnotation[]>
   browserAnnotationMarkerIdsByPageId: Record<string, string[]>
   remoteBrowserPageHandlesByPageId: Record<string, RemoteBrowserPageHandle>
@@ -193,6 +202,8 @@ export type BrowserSlice = {
     pageId: string,
     failure: BrowserCertificateFailure | null
   ) => void
+  setBrowserPageAudible: (pageId: string, audible: boolean) => void
+  setBrowserTabAudioMuted: (tabId: string, muted: boolean) => void
   setBrowserTabUrl: (pageId: string, url: string) => void
   setBrowserPageUrl: (pageId: string, url: string, options?: SetBrowserPageUrlOptions) => void
   setRemoteBrowserPageHandle: (pageId: string, handle: RemoteBrowserPageHandle) => void
@@ -275,15 +286,21 @@ export type BrowserSlice = {
   addBrowserHistoryEntry: (url: string, title: string, faviconUrl?: string | null) => void
   /** Returns the removed entry so an Undo can put it back with its visit count. */
   removeBrowserHistoryEntry: (normalizedUrl: string) => BrowserHistoryEntry | null
-  restoreBrowserHistoryEntry: (entry: BrowserHistoryEntry) => void
+  /** Puts removed or cleared entries back, except ones a revisit has already re-created. */
+  restoreBrowserHistory: (removed: RemovedBrowserHistory) => void
   workspaceDocHistory: WorkspaceDocHistoryEntry[]
+  removeWorkspaceDocHistoryEntry: (docLocation: BrowserPageDocLocation) => void
   /** A visit bumps recency and count; a title-only refresh (bump: false) renames the row. */
   recordWorkspaceDocVisit: (
     docLocation: BrowserPageDocLocation,
     title: string | null,
     options?: { bump?: boolean }
   ) => void
-  clearBrowserHistory: () => void
+  /** Clears pages and documents last visited at or after `since` (everything when omitted). */
+  clearBrowserHistory: (since?: number) => RemovedBrowserHistory
+  /** The page whose history view is open; it opens what you pick in that page. */
+  browserHistoryPageId: string | null
+  setBrowserHistoryPageId: (pageId: string | null) => void
   defaultBrowserSessionProfileId: string | null
   defaultBrowserSessionProfileIdByHostId: Partial<Record<ExecutionHostId, string | null>>
   setDefaultBrowserSessionProfileId: (profileId: string | null) => void

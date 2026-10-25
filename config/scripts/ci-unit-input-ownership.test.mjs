@@ -142,7 +142,10 @@ describe('checked indirect unit inputs', () => {
 
   it('does not clear unresolved local-import fallback with a matching known-source digest', () => {
     const sources = new Map(original)
-    sources.set(helper, "import './missing'; export const census = () => ts.createProgram(options)")
+    sources.set(
+      helper,
+      "import { options } from './census-options'; import './missing'; export const census = () => ts.createProgram(options)"
+    )
     const matching = {
       ...record,
       sourceClosureSha256: unitInputSourceDigest(

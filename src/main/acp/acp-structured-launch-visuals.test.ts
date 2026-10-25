@@ -111,8 +111,7 @@ describe('ACP launch visuals', () => {
     expect(launch.env[NATIVE_CHAT_SCRATCH_DIR_ENV]).toBe(FOLDER)
   })
 
-  // OMP's settings layers (global, profile, project, overlays) replace lists, so any config of
-  // Orca's would hide the user's own skill folders; a plugin folder adds beside them.
+  // OMP config layers replace skill lists; a plugin directory preserves the user's configured folders.
   it("gives OMP the plugin folder, leaving the user's config files as they set them", async () => {
     const launch = await resolve('omp', {
       version: '17.0.5',

@@ -1,6 +1,3 @@
-// A model or effort pick Grok never answers, through the real host: it must not hold the chat's
-// Stop or Close behind it, and on its own it fails at a bound instead of holding the chat forever.
-
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { closeProviderTimelineRigs } from '../native-chat/agent-session-timeline/provider-timeline-assembler-test-support'
 import {
@@ -34,7 +31,7 @@ describe('a Grok model pick Grok never answers during send', () => {
     const invalid = host.cancel(CALLER, {
       envelope: envelope('agentSession.cancel', {}, { payloadFingerprint: 'invalid' })
     })
-    // The write runs outside the session's serialize, so even a refused Stop is answered at once.
+    // Stop bypasses the session queue even while an option write stalls.
     await expect(invalid).resolves.toMatchObject({ ok: false })
     const request = { envelope: envelope('agentSession.cancel', {}) }
     await expect(host.cancel(CALLER, request)).resolves.toMatchObject({ ok: true })
@@ -86,7 +83,6 @@ describe('a Grok model pick Grok never answers during send', () => {
     )
     vi.useRealTimers()
     expect(framesOf(rig.child(), 'session/prompt')).toEqual([])
-    // The chat's queue moved on: a later operation runs.
     await expect(host.readOptions(SESSION)).resolves.toMatchObject({
       current: { model: savedModel }
     })

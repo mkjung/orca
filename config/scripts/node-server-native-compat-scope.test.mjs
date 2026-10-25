@@ -1,5 +1,4 @@
 import { readFileSync } from 'node:fs'
-import { runInNewContext } from 'node:vm'
 import { expect, it, vi } from 'vitest'
 import { parse } from 'yaml'
 import { compileAggregateExpression } from './pr-aggregate-gate-context.mjs'
@@ -355,9 +354,13 @@ it('configures server glibc 2.28 slots and the glibc 2.17 compatibility lane', (
 
   const compat = workflow.jobs.linux_glibc217_compat
   expect(compat.needs).toBe('changes')
-  expect(runInNewContext(compat['runs-on'].slice(3, -2), { inputs: { fast_runners: false } })).toBe(
-    'ubuntu-22.04'
-  )
+  const runner = compileAggregateExpression(compat['runs-on'], ['inputs', 'github'])
+  expect(
+    runner({
+      inputs: { fast_runners: false },
+      github: { event_name: 'workflow_dispatch' }
+    }).coerceString()
+  ).toBe('ubuntu-22.04')
   const run = compat.steps.map((step) => step.run ?? '').join('\n')
   expect(run).toMatch(/quay\.io\/pypa\/manylinux2014_x86_64@sha256:[0-9a-f]{64} /)
   expect(run).toContain('--slot=linux-x64-glibc217 --print-runtime')

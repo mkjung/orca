@@ -549,7 +549,7 @@ describe('launchAgentInNewTab', () => {
       worktreeId: 'wt-1',
       environmentId: 'web-runtime',
       agentSessionKind: 'fresh',
-      agent: 'codex',
+      launchAgent: 'codex',
       viewMode: 'terminal'
     })
   })
@@ -573,7 +573,7 @@ describe('launchAgentInNewTab', () => {
       worktreeId: 'wt-1',
       environmentId: 'web-runtime',
       agentSessionKind: 'fresh',
-      agent: 'codex',
+      launchAgent: 'codex',
       viewMode: 'terminal'
     })
   })
@@ -895,7 +895,8 @@ describe('launchAgentInNewTab', () => {
 
     expect(queuedStartups()).toContainEqual(
       expect.objectContaining({
-        command: "codex '--model' 'gpt-5.5'"
+        // Codex's update prompt would take the Enter that submits the pasted prompt (#18153).
+        command: "codex '-c' 'check_for_update_on_startup=false' '--model' 'gpt-5.5'"
       })
     )
   })

@@ -52,7 +52,7 @@ it('starts the installed release first, else a copy beside every pinned member',
   }
   await expect(spawn()).rejects.toMatchObject({ reason: 'runtimeNotInstalled' })
 
-  // A server without its companion beside it is no copy.
+  // A server without its companion is an incomplete runtime.
   const localBin = join(homePath, '.local', 'bin')
   await mkdir(localBin, { recursive: true })
   await writeFile(join(localBin, command), '', { mode: 0o755 })

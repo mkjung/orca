@@ -128,6 +128,7 @@ export abstract class RuntimeConstructionServices {
   protected abstract getPtyTitleDisplayClear(
     ptyId: string | null | undefined
   ): TitleDisplayClear | null
+  protected abstract flushPendingWaitBlockedCheck(ptyId: string): void
   protected abstract makeDecorativeTitleGateKey(rawTitle: string, normalizedTitle: string): string
   protected abstract refreshTerminalSideEffectConsumerAvailability(): void
   protected abstract resolveNativeChatLaunchDraftOwner(handle: string): {
@@ -229,6 +230,7 @@ export abstract class RuntimeConstructionServices {
     tabId: string
     leafId: string
   }): boolean
+  protected abstract isPtyAwaitingUserInput(ptyId: string): boolean
   abstract getTerminalOrchestrationCliCommand(
     handle: string
   ): ReturnType<typeof resolveTerminalOrchestrationCliCommand>
